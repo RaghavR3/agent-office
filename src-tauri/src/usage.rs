@@ -114,6 +114,16 @@ pub fn parse(v: &Value) -> Usage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_usage_from_the_status_line() {
+        let v = serde_json::json!({ "rate_limits": { "five_hour": { "used_percentage": 22, "resets_at": 1795767600 }, "seven_day": { "used_percentage": 26, "resets_at": 1796122800 } } });
+        let l = from_status_line(&v, 5).unwrap().limits.unwrap();
+        assert_eq!(l.session, Some(Window { used: 22.0, resets_at: 1_795_767_600_000 }));
+        assert_eq!(l.week.map(|w| w.used), Some(26.0));
+        assert_eq!(l.updated_at, 5);
+        assert!(from_status_line(&serde_json::json!({ "model": {} }), 5).is_none(), "no limits, no bar");
+    }
     use serde_json::json;
 
     #[test]

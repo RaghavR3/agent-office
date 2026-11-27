@@ -218,6 +218,7 @@ export default function App() {
             const a = snap.agents.find((x) => x.id === terminal);
             return a ? `${a.name}'s terminal` : "Terminal";
           })()}
+          oneOff={!snap.agents.some((x) => x.id === terminal)}
           onClose={closeTerminal}
         />
       )}

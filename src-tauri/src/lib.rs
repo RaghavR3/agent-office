@@ -56,10 +56,15 @@ async fn send_to(sh: &Shared, id: &str, text: &str) -> anyhow::Result<()> {
             cmux::send_prompt(&id[5..], text, &pw).await
         }
         Host::Builtin => {
-            // Typed into a permission prompt, a message would pick one of its options; like
-            // Orca, hold it until Claude is free.
+            // Typed into a permission prompt or the folder-trust question, a message would pick
+            // one of its options (Return on the trust question is "No, exit"); like Orca, hold
+            // it until Claude is free. Its session has started once our hook has heard from it.
             let mut o = sh.office.lock().await;
-            if o.live.hook_status.get(id).is_some_and(|s| s.state == "waiting") || o.live.blocked.contains_key(id) {
+            let held = match o.live.hook_status.get(id) {
+                None => true,
+                Some(s) => s.state == "waiting" || o.live.blocked.contains_key(id),
+            };
+            if held {
                 o.live.later.entry(id.to_string()).or_default().push(text.to_string());
                 return Ok(());
             }
@@ -165,7 +170,8 @@ async fn wait_ready(sh: &Shared, handle: &str, session_id: &str) -> bool {
                 if !pty::alive(handle) || pty::waiting_on_you(&screen).is_some() {
                     return false;
                 }
-                if pty::ready(&screen) {
+                // The screen alone can mislead mid-redraw; the session starting can't.
+                if pty::ready(&screen) && sh.office.lock().await.live.hooks.started(session_id) {
                     tokio::time::sleep(Duration::from_millis(400)).await;
                     return true;
                 }
@@ -232,8 +238,16 @@ fn resume_builtin(o: &mut Office) {
         let had_turns = transcript::path_for(&m.cwd, &m.session_id).exists();
         let flag = if had_turns { "--resume" } else { "--session-id" };
         let args = claude_args(&m.role, [flag.into(), m.session_id.clone()], &contract, &attachments, &name);
-        if let Err(e) = start_builtin(o, &h, &m.cwd, args) {
-            o.live.error = Some(format!("Couldn't bring {name} back: {e}"));
+        match start_builtin(o, &h, &m.cwd, args) {
+            // One that never got going (it was waiting on you to trust its folder, say) still has
+            // its task to do.
+            Ok(()) if !had_turns => {
+                if let Some(t) = m.task.clone().filter(|t| !t.trim().is_empty()) {
+                    o.live.later.entry(h.clone()).or_default().push(t);
+                }
+            }
+            Ok(()) => {}
+            Err(e) => o.live.error = Some(format!("Couldn't bring {name} back: {e}")),
         }
     }
 }
@@ -1346,10 +1360,11 @@ fn terminal_resize(id: String, cols: u16, rows: u16) -> Res<()> {
     pty::resize(&id, cols, rows).map_err(err)
 }
 
-/// Lets go of a one-off terminal that failed, once you've read why.
+/// Lets go of a one-off terminal (a sign-in, say) when you close its panel: one that failed,
+/// once you've read why, or one you've walked away from, which nothing else could reopen.
 #[tauri::command]
 fn terminal_dismiss(id: String) {
-    if !pty::alive(&id) {
+    if pty::is_utility(&id) {
         pty::close(&id);
     }
 }
@@ -1630,8 +1645,12 @@ fn due_commands(o: &mut Office) -> Vec<(String, Vec<String>)> {
         .agents()
         .into_iter()
         .filter(|a| matches!(a.state.as_str(), "idle" | "done" | "needs_you") && a.ask.is_none())
-        // In the office's own terminals, only once Claude's message box is showing.
-        .filter(|a| host_of(&a.id) != Host::Builtin || (!o.live.blocked.contains_key(&a.id) && pty::ready(&pty::screen(&a.id))))
+        // In the office's own terminals, only once the session has started (our hook has heard
+        // from it) and Claude's message box is showing.
+        .filter(|a| {
+            host_of(&a.id) != Host::Builtin
+                || (o.live.hook_status.contains_key(&a.id) && !o.live.blocked.contains_key(&a.id) && pty::ready(&pty::screen(&a.id)))
+        })
         .filter_map(|a| {
             let mut cmds = o.live.later.get(&a.id).cloned().unwrap_or_default();
             // This Claude Code takes one server per `/mcp reconnect`; "all" isn't a name it knows.

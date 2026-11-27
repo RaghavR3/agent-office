@@ -13,7 +13,7 @@ export function QuitDialog({ names, onClose }: { names: string[]; onClose: () =>
       head={
         <span className="portrait t-empty" style={{ width: 52, height: 52 }} aria-hidden="true">
           <svg viewBox="0 0 16 16" width="22" height="22">
-            <path d="M8 2.5v5M4.6 4.6a5 5 0 1 0 6.8 0" />
+            <path d="M8 2.5v5M4.6 4.6a5 5 0 1 0 6.8 0" fill="none" />
           </svg>
         </span>
       }

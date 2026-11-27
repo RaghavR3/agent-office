@@ -21,7 +21,7 @@ const THEME = {
  * One of the office's own terminals, live: what Claude draws, and your keys back to it.
  * Escape goes to Claude (it interrupts a turn there), so the panel closes from its button.
  */
-export function TerminalPanel({ id, title, onClose }: { id: string; title: string; onClose: () => void }) {
+export function TerminalPanel({ id, title, oneOff, onClose }: { id: string; title: string; oneOff: boolean; onClose: () => void }) {
   const host = useRef<HTMLDivElement>(null);
   const [exit, setExit] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -109,8 +109,9 @@ export function TerminalPanel({ id, title, onClose }: { id: string; title: strin
     return () => clearTimeout(t);
   }, [exit, onClose]);
 
+  // A one-off (a sign-in) can't be opened again once its panel closes, so closing ends it.
   const close = () => {
-    if (exit !== null && exit !== 0) api.terminalDismiss(id);
+    if (oneOff) api.terminalDismiss(id);
     onClose();
   };
 
@@ -120,7 +121,7 @@ export function TerminalPanel({ id, title, onClose }: { id: string; title: strin
         <h2>{title}</h2>
         {exit !== null && <span className={`term-exit${exit === 0 ? "" : " bad"}`}>{exit === 0 ? "Done" : `Ended with code ${exit}`}</span>}
         {error && <span className="term-exit bad">{error}</span>}
-        <span className="term-hint">Esc goes to Claude</span>
+        <span className="term-hint">{oneOff && exit === null ? "Closing this ends it" : "Esc goes to Claude"}</span>
         <button className="close" onClick={close} aria-label="Close the terminal">
           <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
             <path d="M2 2l8 8M10 2l-8 8" />

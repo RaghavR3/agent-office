@@ -39,6 +39,7 @@ const agent = (id: string, name: string, roomId: string, state: Agent["state"], 
   helpers: name === "Otto" ? [helper("h1", "Search the billing code", "Explore"), helper("h2", "Check the failing tests", "general-purpose")] : [],
   ask: null,
   desk: null,
+  blocked: false,
   work: { Otto: 140, Wren: 40, Iris: 75, Mabel: 12, Bea: 30, Cleo: 95 }[name] ?? 0,
   ...extra,
 });

@@ -61,6 +61,8 @@ export interface Agent {
   desk: number | null;
   /** Tool calls in their current session: the papers on their desk. */
   work: number;
+  /** Claude is on a screen only you can answer in its terminal, like trusting a folder. */
+  blocked: boolean;
 }
 
 export interface CosRequest {

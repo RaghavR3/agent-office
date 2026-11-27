@@ -41,10 +41,6 @@ npm run tauri dev                         # or: npm run tauri build -- --bundles
 
 If you installed Rust through Homebrew, put `/opt/homebrew/opt/rustup/bin` on your PATH first.
 
-Or download the `.dmg` from [Releases](https://github.com/RaghavR3/agent-office/releases), when there is
-one. Until releases are signed, macOS won't open it the first time: open System Settings, then Privacy &
-Security, and choose Open Anyway.
-
 ## Using it
 
 | Do this | To |

@@ -212,6 +212,10 @@ pub fn alive(id: &str) -> bool {
     terms().get(id).is_some_and(|t| t.exit.is_none())
 }
 
+pub fn is_utility(id: &str) -> bool {
+    terms().get(id).is_some_and(|t| t.utility)
+}
+
 pub fn write(id: &str, bytes: &[u8]) -> Result<()> {
     let mut all = terms();
     let t = all.get_mut(id).filter(|t| t.exit.is_none()).ok_or_else(|| anyhow!("That terminal has closed"))?;
@@ -293,10 +297,11 @@ pub fn close_all() {
     }
 }
 
-/// Whether Claude's message box is on screen: a prompt between two rules.
+/// Whether Claude's message box is on screen: a prompt between the last two rules.
 pub fn ready(screen: &[String]) -> bool {
     let rules: Vec<usize> = screen.iter().enumerate().filter(|(_, l)| l.trim_start().starts_with("──")).map(|(i, _)| i).collect();
-    rules.windows(2).any(|w| screen[w[0] + 1..w[1]].iter().any(|l| l.trim_start().starts_with('❯')))
+    let [.., top, bottom] = rules[..] else { return false };
+    screen[top + 1..bottom].iter().any(|l| l.trim_start().starts_with('❯'))
 }
 
 /// A screen only you can answer, which would swallow a message typed into it. Trusting a new

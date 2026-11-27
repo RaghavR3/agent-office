@@ -248,6 +248,8 @@ pub struct AgentView {
     pub desk: Option<u32>,
     /// Tool calls in its current session: how much paper is on the desk.
     pub work: u32,
+    /// Claude is on a screen only you can answer in its terminal, like trusting a folder.
+    pub blocked: bool,
     #[serde(skip)]
     pub transcript: Option<PathBuf>,
 }
@@ -1084,6 +1086,7 @@ impl Office {
                 ask,
                 desk: self.p.desks.get(&handle).copied(),
                 work: self.live.work.get(&handle).copied().unwrap_or(0),
+                blocked: blocked.is_some(),
                 prompt: self
                     .live
                     .prompts
@@ -1130,6 +1133,7 @@ impl Office {
                 ask: None,
                 desk: p.desk,
                 work: 0,
+                blocked: false,
                 area: p.area.clone(),
                 transcript: None,
             });
@@ -1558,7 +1562,11 @@ fn activity(s: &PaneStatus) -> Option<String> {
                 .and_then(|c| c.split_whitespace().find(|w| !w.contains('=')))
                 .map(|w| w.rsplit('/').next().unwrap_or(w).to_string())
                 .filter(|w| w.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'));
-            cmd.map(|c| format!("Running {c}")).unwrap_or_else(|| "Running a command".into())
+            match cmd.as_deref() {
+                Some("for" | "while" | "until") => "Running a loop".into(),
+                Some("if" | "case" | "then" | "do" | "{" | "(") | None => "Running a command".into(),
+                Some(c) => format!("Running {c}"),
+            }
         }
         t if t.starts_with("mcp__") => {
             let server = t[5..].split("__").next().unwrap_or("").trim_start_matches("claude_ai_").replace(['_', '-'], " ");
