@@ -95,6 +95,8 @@ export interface Setup {
   claude: boolean;
   /** Where you told the office Claude Code is; empty means your login PATH. */
   claudePath: string;
+  /** Agents still running in the office's own terminals while it shows another app, out of sight. */
+  elsewhere: string[];
 }
 
 /** What a terminal panel is sent: output to draw (base64), or the exit code once it ends. */

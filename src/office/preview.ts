@@ -208,6 +208,7 @@ const snap: Snapshot = {
     cmuxPassword: false,
     claude: true,
     claudePath: "",
+    elsewhere: params.get("elsewhere") !== null ? ["Jude", "Bea"] : [],
   },
 };
 

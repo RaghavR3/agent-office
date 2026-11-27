@@ -290,6 +290,8 @@ pub struct Setup {
     /// Whether Claude Code was found, for the office's own terminals.
     pub claude: bool,
     pub claude_path: String,
+    /// Agents still running in the office's own terminals while it shows another app, out of sight.
+    pub elsewhere: Vec<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
@@ -1298,6 +1300,7 @@ impl Office {
                 cmux_password: !self.p.cmux_password.is_empty(),
                 claude: self.live.claude.is_some(),
                 claude_path: self.p.claude_path.clone(),
+                elsewhere: self.hidden_builtin().into_iter().map(|(_, name)| name).collect(),
             },
         }
     }
@@ -1315,6 +1318,25 @@ impl Office {
             .and_then(|m| m.incarnation.as_deref().zip(t["incarnationId"].as_str()))
             .is_some_and(|(was, now)| was != now);
         (started_here.is_none() || relaunched).then_some(h)
+    }
+
+    /// Agents running in the office's own terminals while it shows another app, by id and name.
+    pub fn hidden_builtin(&self) -> Vec<(String, String)> {
+        if self.live.host == Host::Builtin {
+            return vec![];
+        }
+        crate::pty::list()
+            .into_iter()
+            .filter(|t| !t.utility && t.exit.is_none())
+            .map(|t| {
+                let name = if self.p.cos_handle.as_deref() == Some(t.id.as_str()) {
+                    self.cos_name()
+                } else {
+                    self.p.names.get(&t.id).cloned().unwrap_or_else(|| "An agent".into())
+                };
+                (t.id, name)
+            })
+            .collect()
     }
 
     pub fn cos_alive(&self) -> Option<String> {

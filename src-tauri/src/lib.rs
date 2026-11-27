@@ -225,6 +225,8 @@ fn resume_builtin(o: &mut Office) {
         .managed
         .iter()
         .filter(|(h, m)| host_of(h) == Host::Builtin && !pty::alive(h) && uuid::Uuid::parse_str(&m.session_id).is_ok())
+        // A chief of staff only comes back if it's still the one.
+        .filter(|(h, m)| m.role != "cos" || o.p.cos_handle.as_deref() == Some(h.as_str()))
         .map(|(h, m)| {
             let name = if m.role == "cos" {
                 o.cos_name()
@@ -381,8 +383,19 @@ async fn spawn(
 }
 
 async fn ensure_cos(sh: &Shared) -> anyhow::Result<String> {
-    if let Some(h) = sh.office.lock().await.cos_alive() {
-        return Ok(h);
+    {
+        let mut o = sh.office.lock().await;
+        if let Some(h) = o.cos_alive() {
+            return Ok(h);
+        }
+        // One left in the office's own terminals while the office shows another app has nothing
+        // worth keeping; the new one replaces it rather than leaving it running out of sight.
+        if let Some(old) = o.p.cos_handle.clone().filter(|h| host_of(h) == Host::Builtin && o.live.host != Host::Builtin) {
+            pty::close(&old);
+            o.p.managed.remove(&old);
+            o.p.cos_handle = None;
+            o.save();
+        }
     }
     spawn(sh, HQ, None, "cos", None, None, None).await
 }
@@ -1224,6 +1237,14 @@ fn busy_names(o: &Office, here: bool) -> Vec<String> {
         .filter(|a| matches!(a.state.as_str(), "working" | "starting" | "waiting") || a.ask.is_some() || !a.helpers.is_empty())
         .map(|a| a.name)
         .collect();
+    // Out of sight while the office shows another app, but quitting stops them all the same.
+    if here {
+        for (id, name) in o.hidden_builtin() {
+            if o.live.hook_status.get(&id).is_some_and(|s| matches!(s.state.as_str(), "working" | "waiting")) {
+                names.push(name);
+            }
+        }
+    }
     let cos_here = !here || o.cos_alive().is_some_and(|h| host_of(&h) == Host::Builtin);
     if cos_here && (o.p.requests.iter().any(|r| matches!(r.state.as_str(), "queued" | "sent" | "routing")) || o.p.briefing_pending) {
         names.push(o.cos_name());
@@ -2107,6 +2128,53 @@ mod tests {
         assert_eq!(back.name, a.name);
         assert!(pty::screen(&id).iter().any(|l| l.contains("Reply with just the word OK")), "with its conversation");
         pty::close(&id);
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// Showing another app, the office keeps agents in its own terminals in view as names, and a
+    /// new chief of staff there replaces one left running in them.
+    #[tokio::test]
+    async fn built_in_agents_out_of_sight() {
+        let base = std::env::temp_dir().join(format!("ao-away-{}", uuid::Uuid::new_v4()));
+        let worker = format!("{}away-w-{}", pty::PREFIX, uuid::Uuid::new_v4());
+        let cos = format!("{}away-c-{}", pty::PREFIX, uuid::Uuid::new_v4());
+        for id in [&worker, &cos] {
+            let argv = vec!["/bin/cat".to_string()];
+            pty::spawn(pty::Spawn { id: id.clone(), argv, cwd: std::env::temp_dir().display().to_string(), env: vec![], utility: false }).unwrap();
+        }
+        let mut office = Office::load(base.clone());
+        office.p.cos_name = "Penny".into();
+        office.p.names.insert(worker.clone(), "Jude".into());
+        office.p.cos_handle = Some(cos.clone());
+        office.p.managed.insert(cos.clone(), Managed { role: "cos".into(), ..Default::default() });
+        office.live.host = Host::Builtin;
+        assert!(office.hidden_builtin().is_empty(), "in view on Built-in");
+        office.live.host = Host::Cmux;
+        // Other tests run terminals of their own at the same time; only these two count here.
+        let mut names: Vec<String> = office.hidden_builtin().into_iter().filter(|(id, _)| *id == worker || *id == cos).map(|(_, n)| n).collect();
+        names.sort();
+        assert_eq!(names, ["Jude", "Penny"]);
+        let sh = Shared {
+            app: None,
+            office: Arc::new(Mutex::new(office)),
+            kick: Arc::new(Notify::new()),
+            force_terminals: Arc::new(AtomicBool::new(false)),
+            force_structure: Arc::new(AtomicBool::new(false)),
+        };
+        // cmux has no hook here, so the new chief of staff can't start; the old one still goes.
+        assert!(ensure_cos(&sh).await.is_err());
+        for _ in 0..40 {
+            if !pty::alive(&cos) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(!pty::alive(&cos), "the old chief of staff is closed");
+        assert!(pty::alive(&worker), "workers keep going");
+        let o = sh.office.lock().await;
+        assert!(o.p.cos_handle.is_none() && !o.p.managed.contains_key(&cos));
+        drop(o);
+        pty::close(&worker);
         std::fs::remove_dir_all(&base).ok();
     }
 

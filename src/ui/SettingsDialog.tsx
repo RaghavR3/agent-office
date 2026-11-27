@@ -9,6 +9,8 @@ const HOSTS: { id: Setup["preference"]; label: string }[] = [
   { id: "builtin", label: "Built-in" },
 ];
 
+const names = (list: string[]) => (list.length === 1 ? list[0] : `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}`);
+
 function hostLine(s: Setup): string {
   if (s.host === "builtin") {
     if (s.preference !== "auto") return "Agents run in the office's own terminals, inside Agent Office.";
@@ -78,6 +80,12 @@ export function SettingsDialog({ setup, onClose }: { setup: Setup; onClose: () =
           ))}
         </div>
         <p className="quiet">{hostLine(setup)}</p>
+        {setup.elsewhere.length > 0 && (
+          <p className="warn">
+            {names(setup.elsewhere)} {setup.elsewhere.length === 1 ? "is" : "are"} still running in the office's own terminals, out of
+            sight here. Switch to Built-in to see them; quitting stops them.
+          </p>
+        )}
       </section>
 
       {(setup.host === "builtin" || setup.preference === "builtin") && (
