@@ -3238,3 +3238,79 @@ blockquote .link-more {
   border-top: 0;
   padding-top: 0;
 }
+
+/* ---- the office's own terminals ------------------------------------------------------------ */
+
+.term-panel {
+  position: absolute;
+  inset: 52px 18px 18px;
+  display: flex;
+  flex-direction: column;
+  background: #1d1b24;
+  border: 2px solid var(--ink);
+  border-radius: 14px;
+  box-shadow: var(--pop);
+  overflow: hidden;
+  z-index: 9;
+  animation: rise 0.16s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+.term-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px 7px 16px;
+  color: var(--on-glass);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.term-head h2 {
+  margin: 0 auto 0 0;
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
+.term-hint {
+  font-size: 11.5px;
+  color: var(--on-glass-2);
+}
+
+.term-exit {
+  padding: 2px 9px;
+  border-radius: 99px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #d4f0df;
+  background: rgba(47, 115, 80, 0.45);
+}
+
+.term-exit.bad {
+  color: #fff;
+  background: var(--red);
+}
+
+.term-head .close {
+  align-self: center;
+}
+
+.term-head .close path {
+  stroke: var(--on-glass-2);
+}
+
+.term-head .close:hover {
+  background: var(--glass-hi);
+}
+
+.term-body {
+  flex: 1;
+  min-height: 0;
+  padding: 10px 6px 8px 14px;
+}
+
+.term-body .xterm {
+  height: 100%;
+}
+
+.term-body .xterm-viewport {
+  scrollbar-width: thin;
+}

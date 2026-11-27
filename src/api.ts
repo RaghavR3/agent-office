@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 
 export type AgentState = "starting" | "working" | "waiting" | "needs_you" | "done" | "idle";
 
@@ -61,6 +61,8 @@ export interface Agent {
   desk: number | null;
   /** Tool calls in their current session: the papers on their desk. */
   work: number;
+  /** Claude is on a screen only you can answer in its terminal, like trusting a folder. */
+  blocked: boolean;
 }
 
 export interface CosRequest {
@@ -78,10 +80,10 @@ export interface CosRequest {
 }
 
 export interface Setup {
-  /** The terminal app the office is showing. */
-  host: "orca" | "cmux";
-  /** "auto" shows Orca when it's running, else cmux. */
-  preference: "auto" | "orca" | "cmux";
+  /** The terminal app the office is showing: Orca, cmux, or its own terminals. */
+  host: "orca" | "cmux" | "builtin";
+  /** "auto" shows Orca when it's running, then cmux, then the office's own terminals. */
+  preference: "auto" | "orca" | "cmux" | "builtin";
   orca: boolean;
   cmux: boolean;
   /** Whether Agent Office's own status hook is installed. */
@@ -89,7 +91,16 @@ export interface Setup {
   /** Why the office can't send commands to cmux, when it can't. */
   cmuxAccess: string | null;
   cmuxPassword: boolean;
+  /** Whether Claude Code was found, for the office's own terminals. */
+  claude: boolean;
+  /** Where you told the office Claude Code is; empty means your login PATH. */
+  claudePath: string;
+  /** Agents still running in the office's own terminals while it shows another app, out of sight. */
+  elsewhere: string[];
 }
+
+/** What a terminal panel is sent: output to draw (base64), or the exit code once it ends. */
+export type TerminalEvent = { output: string } | { exit: number };
 
 export interface UsageWindow {
   /** Percent of the limit used, 0 to 100. */
@@ -254,6 +265,15 @@ export const api = {
   importAttachment: (path: string) => invoke<string>("import_attachment", { path }),
   openLink: (url: string) => invoke<void>("open_link", { url }),
   skills: (agentId: string | null, roomId: string | null) => invoke<Skill[]>("skills", { agentId, roomId }),
+  /** Starts streaming one of the office's own terminals. Resolves to the panel's key and the screen as it is now. */
+  terminalAttach: (id: string, onEvent: Channel<TerminalEvent>) => invoke<[number, string]>("terminal_attach", { id, onEvent }),
+  terminalDetach: (id: string, key: number) => invoke<void>("terminal_detach", { id, key }),
+  terminalWrite: (id: string, data: string) => invoke<void>("terminal_write", { id, data }),
+  terminalResize: (id: string, cols: number, rows: number) => invoke<void>("terminal_resize", { id, cols, rows }),
+  terminalDismiss: (id: string) => invoke<void>("terminal_dismiss", { id }),
+  claudeSignIn: () => invoke<void>("claude_sign_in"),
+  setClaudePath: (path: string) => invoke<void>("set_claude_path", { path }),
+  quitApp: () => invoke<void>("quit_app"),
 };
 
 /** Time until a limit resets, short: "37m", "3h", "2d". */
@@ -276,7 +296,7 @@ export function ago(ms: number, now: number): string {
   return `${Math.round(h / 24)}d ago`;
 }
 
-export const hostName = (s: Setup) => (s.host === "cmux" ? "cmux" : "Orca");
+export const hostName = (s: Setup) => (s.host === "cmux" ? "cmux" : s.host === "builtin" ? "the terminal" : "Orca");
 
 /** cmux needs the hook to see anyone, and socket access to start or message them. */
 export const needsSetup = (s: Setup) => s.host === "cmux" && s.cmux && (!s.hooks || !!s.cmuxAccess);

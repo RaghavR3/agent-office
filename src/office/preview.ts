@@ -3,6 +3,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { mockIPC } from "@tauri-apps/api/mocks";
+import { emit } from "@tauri-apps/api/event";
 import "@fontsource-variable/archivo/wdth.css";
 import "../styles.css";
 import App from "../App";
@@ -38,6 +39,7 @@ const agent = (id: string, name: string, roomId: string, state: Agent["state"], 
   helpers: name === "Otto" ? [helper("h1", "Search the billing code", "Explore"), helper("h2", "Check the failing tests", "general-purpose")] : [],
   ask: null,
   desk: null,
+  blocked: false,
   work: { Otto: 140, Wren: 40, Iris: 75, Mabel: 12, Bea: 30, Cleo: 95 }[name] ?? 0,
   ...extra,
 });
@@ -197,18 +199,44 @@ const snap: Snapshot = {
     ],
   },
   setup: {
-    host: "orca",
+    host: params.get("builtin") !== null ? "builtin" : "orca",
     preference: "auto",
     orca: true,
     cmux: true,
     hooks: false,
     cmuxAccess: "cmux closed the connection. Its socket only lets in cmux's own terminals until you allow other apps.",
     cmuxPassword: false,
+    claude: true,
+    claudePath: "",
+    elsewhere: params.get("elsewhere") !== null ? ["Jude", "Bea"] : [],
   },
 };
 
-mockIPC((cmd) => {
+// A made-up Claude screen for the terminal panel (?builtin, then open someone's terminal).
+const screen = [
+  "\x1b[1m ▐▛███▜▌\x1b[0m   Claude Code",
+  "▝▜█████▛▘  Opus · Claude Max",
+  "  ▘▘ ▝▝    ~/code/api",
+  "",
+  "\x1b[38;5;245m❯\x1b[0m Make the retry job configurable",
+  "",
+  "\x1b[38;5;114m⏺\x1b[0m I made the schedule a setting. Which default do you want, hourly or daily?",
+  "",
+  "\x1b[38;5;240m" + "─".repeat(100) + "\x1b[0m",
+  "❯ ",
+  "\x1b[38;5;240m" + "─".repeat(100) + "\x1b[0m",
+  "  \x1b[38;5;245m⏵⏵ auto mode on\x1b[0m",
+].join("\r\n");
+const toB64 = (t: string) => btoa(String.fromCharCode(...new TextEncoder().encode(t)));
+
+mockIPC(
+  (cmd, args) => {
   if (cmd === "snapshot") return snap;
+  if (cmd === "open_terminal" && snap.setup.host === "builtin") {
+    emit("open-terminal", (args as { agentId: string }).agentId);
+    return null;
+  }
+  if (cmd === "terminal_attach") return [1, toB64(screen)];
   if (cmd === "links")
     return {
       top: [
@@ -256,6 +284,8 @@ mockIPC((cmd) => {
       { kind: "said", text: "I made the schedule a setting. It needs a default, so I've asked which one you want before I open the PR. Everything else is ready: tests pass, and the migration only touches the jobs table.", ts: "" },
     ];
   return null;
-});
+  },
+  { shouldMockEvents: true },
+);
 
 ReactDOM.createRoot(document.getElementById("host")!).render(React.createElement(App));

@@ -237,6 +237,16 @@ export function Hud({
             {needs.length} {needs.length === 1 ? "needs" : "need"} you
           </span>
         )}
+        {snap.setup.elsewhere.length > 0 && (
+          <button
+            className="bar-btn setup"
+            onClick={() => api.setHost("builtin")}
+            title={`${snap.setup.elsewhere.join(", ")} still running in the office's own terminals. Click to see them.`}
+          >
+            <i className="dot red" />
+            {snap.setup.elsewhere.length} running in Built-in
+          </button>
+        )}
         <span className="spacer" data-tauri-drag-region />
         <ConnectionsButton servers={snap.mcp} open={panel === "mcp"} onToggle={() => toggle("mcp")} />
         {snap.usage && <UsageButton usage={snap.usage} open={panel === "usage"} onToggle={() => toggle("usage")} />}

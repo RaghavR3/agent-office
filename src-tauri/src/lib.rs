@@ -6,16 +6,18 @@ mod links;
 mod mcp;
 mod office;
 mod orca;
+mod pty;
 mod skills;
 mod status;
 mod transcript;
 mod usage;
 
-use office::{file_names, now_ms, sh_quote, with_files, Action, CosRequest, Host, Managed, Office, Pending, Snapshot, HQ};
+use office::{file_names, host_of, now_ms, sh_quote, with_files, Action, CosRequest, Host, Managed, Office, Pending, Snapshot, HQ};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
@@ -23,6 +25,8 @@ use tokio::sync::{Mutex, Notify};
 
 #[derive(Clone)]
 pub struct Shared {
+    /// None only in tests, which run without a window.
+    app: Option<AppHandle>,
     office: Arc<Mutex<Office>>,
     kick: Arc<Notify>,
     force_terminals: Arc<AtomicBool>,
@@ -42,88 +46,226 @@ fn err(e: impl std::fmt::Display) -> String {
 }
 
 // ---- talking to the terminal app ----------------------------------------------------------
-// Agent ids say where they live: "cmux:<surface>" for cmux, Orca's terminal handle otherwise.
+// Agent ids say where they live: "cmux:<surface>" for cmux, "pty:<id>" for the office's own
+// terminals, Orca's terminal handle otherwise.
 
 async fn send_to(sh: &Shared, id: &str, text: &str) -> anyhow::Result<()> {
-    match id.strip_prefix("cmux:") {
-        Some(surface) => {
+    match host_of(id) {
+        Host::Cmux => {
             let pw = sh.office.lock().await.p.cmux_password.clone();
-            cmux::send_prompt(surface, text, &pw).await
+            cmux::send_prompt(&id[5..], text, &pw).await
         }
-        None => orca::send_prompt(id, text).await,
+        Host::Builtin => {
+            // Typed into a permission prompt or the folder-trust question, a message would pick
+            // one of its options (Return on the trust question is "No, exit"); like Orca, hold
+            // it until Claude is free. Its session has started once our hook has heard from it.
+            let mut o = sh.office.lock().await;
+            let held = match o.live.hook_status.get(id) {
+                None => true,
+                Some(s) => s.state == "waiting" || o.live.blocked.contains_key(id),
+            };
+            if held {
+                o.live.later.entry(id.to_string()).or_default().push(text.to_string());
+                return Ok(());
+            }
+            drop(o);
+            pty::send(id, text).await
+        }
+        Host::Orca => orca::send_prompt(id, text).await,
     }
 }
 
 async fn close_agent(sh: &Shared, id: &str) -> anyhow::Result<()> {
-    match id.strip_prefix("cmux:") {
-        Some(surface) => {
+    match host_of(id) {
+        Host::Cmux => {
             let (pw, ws) = {
                 let o = sh.office.lock().await;
                 // Only close the whole workspace if the office opened it for this agent.
                 (o.p.cmux_password.clone(), o.p.managed.get(id).and_then(|m| m.workspace.clone()))
             };
-            cmux::close(surface, ws.as_deref(), &pw).await
+            cmux::close(&id[5..], ws.as_deref(), &pw).await
         }
-        None => orca::close_terminal(id).await,
+        Host::Builtin => {
+            pty::close(id);
+            Ok(())
+        }
+        Host::Orca => orca::close_terminal(id).await,
     }
 }
 
 async fn focus_agent(sh: &Shared, id: &str) -> anyhow::Result<()> {
-    match id.strip_prefix("cmux:") {
-        Some(surface) => {
+    match host_of(id) {
+        Host::Cmux => {
             let (pw, ws) = {
                 let o = sh.office.lock().await;
                 (o.p.cmux_password.clone(), o.cmux_workspace(id))
             };
-            cmux::focus(surface, ws.as_deref(), &pw).await
+            cmux::focus(&id[5..], ws.as_deref(), &pw).await
         }
-        None => orca::focus_terminal(id).await,
+        // The office's own terminals open in its terminal panel.
+        Host::Builtin => {
+            let app = sh.app.as_ref().ok_or_else(|| anyhow::anyhow!("There's no window to open it in"))?;
+            show_window(app);
+            app.emit("open-terminal", id).map_err(Into::into)
+        }
+        Host::Orca => orca::focus_terminal(id).await,
     }
 }
 
 /// One line typed straight in, for when the terminal app's own prompt route would hold it back.
 async fn type_line(sh: &Shared, id: &str, text: &str) -> anyhow::Result<()> {
-    match id.strip_prefix("cmux:") {
-        Some(surface) => {
+    match host_of(id) {
+        Host::Cmux => {
             let pw = sh.office.lock().await.p.cmux_password.clone();
-            cmux::send_prompt(surface, text, &pw).await
+            cmux::send_prompt(&id[5..], text, &pw).await
         }
-        None => orca::type_line(id, text).await,
+        Host::Builtin => pty::send(id, text).await,
+        Host::Orca => orca::type_line(id, text).await,
     }
 }
 
 async fn press_escape(sh: &Shared, id: &str) -> anyhow::Result<()> {
-    match id.strip_prefix("cmux:") {
-        Some(surface) => {
+    match host_of(id) {
+        Host::Cmux => {
             let pw = sh.office.lock().await.p.cmux_password.clone();
-            cmux::press_escape(surface, &pw).await
+            cmux::press_escape(&id[5..], &pw).await
         }
-        None => orca::press_escape(id).await,
+        Host::Builtin => pty::write(id, b"\x1b"),
+        Host::Orca => orca::press_escape(id).await,
     }
 }
 
-/// Waits until a new session can take a prompt.
-async fn wait_ready(sh: &Shared, handle: &str, session_id: &str) {
-    if handle.starts_with("cmux:") {
-        // Our hook reports the session starting; give Claude a moment to draw its prompt.
-        for _ in 0..150 {
-            if sh.office.lock().await.live.hooks.started(session_id) {
-                tokio::time::sleep(Duration::from_millis(1500)).await;
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(300)).await;
-        }
-        return;
+async fn read_screen(id: &str) -> anyhow::Result<Vec<String>> {
+    match host_of(id) {
+        Host::Builtin => Ok(pty::screen(id)),
+        _ => orca::read_screen(id).await,
     }
-    if orca::wait_ready(handle, 45_000).await.is_err() {
-        tokio::time::sleep(Duration::from_secs(2)).await;
+}
+
+async fn send_keys(id: &str, keys: &str) -> anyhow::Result<()> {
+    match host_of(id) {
+        Host::Builtin => pty::write(id, keys.as_bytes()),
+        _ => orca::send_keys(id, keys).await,
+    }
+}
+
+/// Waits until a new session can take a prompt. Says whether it can: in the office's own
+/// terminals, Claude may first need you to trust the folder or sign in.
+async fn wait_ready(sh: &Shared, handle: &str, session_id: &str) -> bool {
+    match host_of(handle) {
+        Host::Cmux => {
+            // Our hook reports the session starting; give Claude a moment to draw its prompt.
+            for _ in 0..150 {
+                if sh.office.lock().await.live.hooks.started(session_id) {
+                    tokio::time::sleep(Duration::from_millis(1500)).await;
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            }
+            true
+        }
+        Host::Builtin => {
+            for _ in 0..90 {
+                let screen = pty::screen(handle);
+                if !pty::alive(handle) || pty::waiting_on_you(&screen).is_some() {
+                    return false;
+                }
+                // The screen alone can mislead mid-redraw; the session starting can't.
+                if pty::ready(&screen) && sh.office.lock().await.live.hooks.started(session_id) {
+                    tokio::time::sleep(Duration::from_millis(400)).await;
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            }
+            false
+        }
+        Host::Orca => {
+            if orca::wait_ready(handle, 45_000).await.is_err() {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            true
+        }
+    }
+}
+
+/// Claude's arguments for an agent. Every value is generated here; the task text is typed into
+/// Claude afterwards, never put on a command line.
+fn claude_args(role: &str, start: [String; 2], contract: &str, attachments: &str, name: &str) -> Vec<String> {
+    let mut args: Vec<String> = start.into();
+    let rest: &[&str] = if role == "cos" {
+        &["--model", "sonnet", "--permission-mode", "auto", "--tools", "", "--strict-mcp-config", "--append-system-prompt-file", contract, "-n", name]
+    } else {
+        &["--permission-mode", "auto", "--append-system-prompt-file", contract, "--add-dir", attachments, "--disallowedTools", "AskUserQuestion", "-n", name]
+    };
+    args.extend(rest.iter().map(|a| a.to_string()));
+    args
+}
+
+/// Starts Claude in one of the office's own terminals, with the office's hook and status line.
+fn start_builtin(o: &Office, handle: &str, cwd: &str, args: Vec<String>) -> anyhow::Result<()> {
+    let claude = o.live.claude.clone().ok_or_else(|| anyhow::anyhow!("Claude Code isn't installed, or isn't where the office looks. Set its path in Settings"))?;
+    let mut argv = vec![claude.display().to_string()];
+    argv.extend(args);
+    argv.extend(["--settings".to_string(), hooks::session_settings()]);
+    let mut env = vec![("AGENT_OFFICE_TERMINAL".to_string(), handle.to_string())];
+    if let Some(theirs) = hooks::your_status_line() {
+        env.push(("AGENT_OFFICE_STATUSLINE".into(), theirs));
+    }
+    pty::spawn(pty::Spawn { id: handle.into(), argv, cwd: cwd.into(), env, utility: false })
+}
+
+/// Starts again every agent that was running in the office's own terminals when the app last
+/// quit, each in its own session, under the same id, so it keeps its name and desk.
+fn resume_builtin(o: &mut Office) {
+    o.live.builtin_resumed = true;
+    let contract = |role: &str| o.contract_path(role).display().to_string();
+    let attachments = o.attachments_dir().display().to_string();
+    let todo: Vec<(String, Managed, String, String)> = o
+        .p
+        .managed
+        .iter()
+        .filter(|(h, m)| host_of(h) == Host::Builtin && !pty::alive(h) && uuid::Uuid::parse_str(&m.session_id).is_ok())
+        // A chief of staff only comes back if it's still the one.
+        .filter(|(h, m)| m.role != "cos" || o.p.cos_handle.as_deref() == Some(h.as_str()))
+        .map(|(h, m)| {
+            let name = if m.role == "cos" {
+                o.cos_name()
+            } else {
+                o.p.session_names.get(h).or_else(|| o.p.names.get(h)).cloned().unwrap_or_else(|| "Agent".into())
+            };
+            (h.clone(), m.clone(), name, contract(&m.role))
+        })
+        .collect();
+    for (h, m, name, contract) in todo {
+        let had_turns = transcript::path_for(&m.cwd, &m.session_id).exists();
+        let flag = if had_turns { "--resume" } else { "--session-id" };
+        let args = claude_args(&m.role, [flag.into(), m.session_id.clone()], &contract, &attachments, &name);
+        match start_builtin(o, &h, &m.cwd, args) {
+            // One that never got going (it was waiting on you to trust its folder, say) still has
+            // its task to do.
+            Ok(()) if !had_turns => {
+                if let Some(t) = m.task.clone().filter(|t| !t.trim().is_empty()) {
+                    o.live.later.entry(h.clone()).or_default().push(t);
+                }
+            }
+            Ok(()) => {}
+            Err(e) => o.live.error = Some(format!("Couldn't bring {name} back: {e}")),
+        }
+    }
+}
+
+fn show_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
     }
 }
 
 // ---- spawning ------------------------------------------------------------------------------
 
-/// Opens a new Claude Code session for a room in Orca or cmux. Every value in the command line
-/// is generated here; the task text is typed into Claude afterwards, never through the shell.
+/// Opens a new Claude Code session for a room in the terminal app. Every value in the command
+/// line is generated here; the task text is typed into Claude afterwards, never through a shell.
 async fn spawn(
     sh: &Shared,
     room_id: &str,
@@ -136,11 +278,11 @@ async fn spawn(
     // A saved session comes back with its own id and name; anything else starts fresh.
     let session_id = resume.as_ref().map(|(id, _)| id.clone()).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let start = match &resume {
-        Some((id, _)) => format!("--resume {id}"),
-        None => format!("--session-id {session_id}"),
+        Some((id, _)) => ["--resume".to_string(), id.clone()],
+        None => ["--session-id".to_string(), session_id.clone()],
     };
     let pending_id = format!("pending-{session_id}");
-    let (selector, cwd, name, command, host, password) = {
+    let (selector, cwd, name, args, host, password) = {
         let mut o = sh.office.lock().await;
         let host = o.live.host;
         if host == Host::Cmux && !o.live.hooks_installed {
@@ -157,20 +299,8 @@ async fn spawn(
         let name = if role == "cos" { o.cos_name() } else { o.pick_name() };
         let contract = o.contract_path(role).display().to_string();
         let attachments = o.attachments_dir().display().to_string();
-        let command = if role == "cos" {
-            format!(
-                "claude {start} --model sonnet --permission-mode auto --tools '' --strict-mcp-config --append-system-prompt-file {} -n {}",
-                sh_quote(&contract),
-                sh_quote(&name)
-            )
-        } else {
-            format!(
-                "claude {start} --permission-mode auto --append-system-prompt-file {} --add-dir {} --disallowedTools AskUserQuestion -n {}",
-                sh_quote(&contract),
-                sh_quote(&attachments),
-                sh_quote(resume.as_ref().map(|(_, n)| n).unwrap_or(&name))
-            )
-        };
+        let shown = if role == "cos" { &name } else { resume.as_ref().map(|(_, n)| n).unwrap_or(&name) };
+        let args = claude_args(role, start, &contract, &attachments, shown);
         o.live.pending.push(Pending {
             id: pending_id.clone(),
             name: name.clone(),
@@ -183,15 +313,20 @@ async fn spawn(
         });
         let password = o.p.cmux_password.clone();
         match area {
-            Some(a) => (format!("id:{}", a.id), a.path, name, command, host, password),
-            None => (room.selector, room.path, name, command, host, password),
+            Some(a) => (format!("id:{}", a.id), a.path, name, args, host, password),
+            None => (room.selector, room.path, name, args, host, password),
         }
     };
     sh.nudge();
 
+    let command = format!("claude {}", args.iter().map(|a| sh_quote(a)).collect::<Vec<_>>().join(" "));
     let created = match host {
         Host::Orca => orca::create_terminal(&selector, &command, &name).await.map(|h| (h, None)),
         Host::Cmux => cmux::create(&cwd, &command, &name, &password).await.map(|(ws, surface)| (format!("cmux:{surface}"), Some(ws))),
+        Host::Builtin => {
+            let handle = format!("{}{}", pty::PREFIX, uuid::Uuid::new_v4());
+            start_builtin(&*sh.office.lock().await, &handle, &cwd, args).map(|_| (handle, None))
+        }
     };
     {
         let mut o = sh.office.lock().await;
@@ -231,9 +366,14 @@ async fn spawn(
     let (handle, _) = created?;
 
     // Claude needs a moment to draw its prompt before it can take input.
-    wait_ready(sh, &handle, &session_id).await;
+    let ready = wait_ready(sh, &handle, &session_id).await;
     let sent = match &task {
-        Some(t) if !t.trim().is_empty() => send_to(sh, &handle, t).await,
+        Some(t) if !t.trim().is_empty() && ready => send_to(sh, &handle, t).await,
+        // Claude needs you first (to trust the folder, say); the task goes in once it's free.
+        Some(t) if !t.trim().is_empty() => {
+            sh.office.lock().await.live.later.entry(handle.clone()).or_default().push(t.clone());
+            Ok(())
+        }
         _ => Ok(()),
     };
     sh.office.lock().await.live.starting.remove(&handle);
@@ -243,8 +383,19 @@ async fn spawn(
 }
 
 async fn ensure_cos(sh: &Shared) -> anyhow::Result<String> {
-    if let Some(h) = sh.office.lock().await.cos_alive() {
-        return Ok(h);
+    {
+        let mut o = sh.office.lock().await;
+        if let Some(h) = o.cos_alive() {
+            return Ok(h);
+        }
+        // One left in the office's own terminals while the office shows another app has nothing
+        // worth keeping; the new one replaces it rather than leaving it running out of sight.
+        if let Some(old) = o.p.cos_handle.clone().filter(|h| host_of(h) == Host::Builtin && o.live.host != Host::Builtin) {
+            pty::close(&old);
+            o.p.managed.remove(&old);
+            o.p.cos_handle = None;
+            o.save();
+        }
     }
     spawn(sh, HQ, None, "cos", None, None, None).await
 }
@@ -499,17 +650,27 @@ async fn answer_ask(sh: State<'_, Shared>, agent_id: String, answers: Vec<String
 
 /// Opens a terminal in HQ for a one-off Claude command, like signing in to a server. It isn't an
 /// agent: the office leaves it off the floor, and it closes itself when the command succeeds.
-async fn open_utility(sh: &Shared, command: &str, title: &str, server: &str, room_id: Option<&str>) -> anyhow::Result<()> {
-    let (host, room, password) = {
+async fn open_utility(sh: &Shared, args: &[String], title: &str, server: &str, room_id: Option<&str>) -> anyhow::Result<()> {
+    let (host, room, password, claude) = {
         let o = sh.office.lock().await;
         let room = room_id.and_then(|id| o.rooms().into_iter().find(|r| r.id == id)).or_else(|| o.hq_room());
-        (o.live.host, room.ok_or_else(|| anyhow::anyhow!("There's no folder to open a terminal in"))?, o.p.cmux_password.clone())
+        (o.live.host, room.ok_or_else(|| anyhow::anyhow!("There's no folder to open a terminal in"))?, o.p.cmux_password.clone(), o.live.claude.clone())
     };
+    let command = format!("claude {} && exit", args.iter().map(|a| sh_quote(a)).collect::<Vec<_>>().join(" "));
     let handle = match host {
-        Host::Orca => orca::create_terminal(&room.selector, command, title).await?,
-        Host::Cmux => format!("cmux:{}", cmux::create(&room.path, command, title, &password).await?.1),
+        Host::Orca => orca::create_terminal(&room.selector, &command, title).await?,
+        Host::Cmux => format!("cmux:{}", cmux::create(&room.path, &command, title, &password).await?.1),
+        Host::Builtin => {
+            let claude = claude.ok_or_else(|| anyhow::anyhow!("Claude Code isn't installed, or isn't where the office looks"))?;
+            let handle = format!("{}{}", pty::PREFIX, uuid::Uuid::new_v4());
+            let argv = std::iter::once(claude.display().to_string()).chain(args.iter().cloned()).collect();
+            pty::spawn(pty::Spawn { id: handle.clone(), argv, cwd: room.path.clone(), env: vec![], utility: true })?;
+            handle
+        }
     };
-    sh.office.lock().await.live.signins.insert(handle.clone(), (server.to_string(), false));
+    if !server.is_empty() {
+        sh.office.lock().await.live.signins.insert(handle.clone(), (server.to_string(), false));
+    }
     // Bring it forward: the sign-in may ask for something, and if it fails the error is there.
     let _ = focus_agent(sh, &handle).await;
     sh.nudge();
@@ -540,8 +701,8 @@ async fn mcp_sign_in(sh: State<'_, Shared>, name: String) -> Res<()> {
         }
         (server.name, server.room)
     };
-    let command = format!("claude mcp login {} && exit", sh_quote(&name));
-    open_utility(&sh, &command, &format!("Sign in to {name}"), &name, room.as_deref()).await.map_err(err)
+    let args = ["mcp".to_string(), "login".into(), name.clone()];
+    open_utility(&sh, &args, &format!("Sign in to {name}"), &name, room.as_deref()).await.map_err(err)
 }
 
 /// Adds a remote MCP server for all your sessions (Claude's user scope) and signs in to it.
@@ -559,12 +720,25 @@ async fn mcp_add(sh: State<'_, Shared>, name: String, url: String) -> Res<()> {
     if sh.office.lock().await.live.mcp_known.iter().any(|(n, s)| n == &name && s == "you") {
         return Err(format!("You already have a server called {name}"));
     }
-    let command = format!(
-        "claude mcp add --scope user --transport http {n} {u} && claude mcp login {n} && exit",
-        n = sh_quote(&name),
-        u = sh_quote(&url)
-    );
-    open_utility(&sh, &command, &format!("Add {name}"), &name, None).await.map_err(err)
+    // Adding needs nothing from you, so it runs out of sight; signing in gets a terminal.
+    let claude = sh.office.lock().await.live.claude.clone().ok_or("Claude Code isn't installed, or isn't where the office looks")?;
+    let (n, u) = (name.clone(), url.clone());
+    let added = tauri::async_runtime::spawn_blocking(move || {
+        std::process::Command::new(claude)
+            .args(["mcp", "add", "--scope", "user", "--transport", "http", &n, &u])
+            .env("PATH", pty::login_path())
+            .stdin(std::process::Stdio::null())
+            .output()
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)?;
+    if !added.status.success() {
+        let why = String::from_utf8_lossy(&added.stderr).trim().to_string();
+        return Err(format!("Couldn't add {name}: {}", if why.is_empty() { "Claude Code said no".into() } else { brief::clip(&why, 200) }));
+    }
+    let args = ["mcp".to_string(), "login".into(), name.clone()];
+    open_utility(&sh, &args, &format!("Add {name}"), &name, None).await.map_err(err)
 }
 
 /// Has each agent reconnect the servers that are failing for it, as soon as it's free.
@@ -859,7 +1033,7 @@ async fn add_room(sh: State<'_, Shared>, path: String) -> Res<()> {
     }
     let host = sh.office.lock().await.live.host;
     match host {
-        Host::Cmux => sh.office.lock().await.add_folder(&path),
+        Host::Cmux | Host::Builtin => sh.office.lock().await.add_folder(&path),
         Host::Orca => {
             orca::call("repo.add", serde_json::json!({ "path": path }), Duration::from_secs(20))
                 .await
@@ -1021,6 +1195,9 @@ async fn refresh_usage(sh: State<'_, Shared>) -> Res<()> {
 
 /// Whether Claude is still running in an agent's terminal.
 async fn claude_running(sh: &Shared, id: &str) -> bool {
+    if host_of(id) == Host::Builtin {
+        return pty::alive(id);
+    }
     match id.strip_prefix("cmux:") {
         Some(surface) => sh.office.lock().await.live.hooks.sessions().any(|s| s.surface.as_deref() == Some(surface) && !s.ended()),
         None => match orca::list_terminals().await {
@@ -1051,15 +1228,25 @@ async fn restart_on_new_account(sh: &Shared, id: &str, command: &str) -> anyhow:
 }
 
 /// Who's in the middle of something: a turn, a permission prompt, an open question, or helpers.
-fn busy_names(o: &Office) -> Vec<String> {
+/// `here` counts only agents in the office's own terminals, which quitting would stop.
+fn busy_names(o: &Office, here: bool) -> Vec<String> {
     let mut names: Vec<String> = o
         .agents()
         .into_iter()
-        .filter(|a| a.role == "worker")
+        .filter(|a| a.role == "worker" && (!here || host_of(&a.id) == Host::Builtin))
         .filter(|a| matches!(a.state.as_str(), "working" | "starting" | "waiting") || a.ask.is_some() || !a.helpers.is_empty())
         .map(|a| a.name)
         .collect();
-    if o.p.requests.iter().any(|r| matches!(r.state.as_str(), "queued" | "sent" | "routing")) || o.p.briefing_pending {
+    // Out of sight while the office shows another app, but quitting stops them all the same.
+    if here {
+        for (id, name) in o.hidden_builtin() {
+            if o.live.hook_status.get(&id).is_some_and(|s| matches!(s.state.as_str(), "working" | "waiting")) {
+                names.push(name);
+            }
+        }
+    }
+    let cos_here = !here || o.cos_alive().is_some_and(|h| host_of(&h) == Host::Builtin);
+    if cos_here && (o.p.requests.iter().any(|r| matches!(r.state.as_str(), "queued" | "sent" | "routing")) || o.p.briefing_pending) {
         names.push(o.cos_name());
     }
     names
@@ -1071,7 +1258,10 @@ fn busy_names(o: &Office) -> Vec<String> {
 async fn switch_account(sh: State<'_, Shared>, account_id: String) -> Res<()> {
     let (sessions, cos) = {
         let o = sh.office.lock().await;
-        let busy = busy_names(&o);
+        if o.live.host != Host::Orca {
+            return Err("Switching accounts needs Orca, which keeps the saved accounts".into());
+        }
+        let busy = busy_names(&o, false);
         if !busy.is_empty() {
             let who = match busy.len() {
                 1 => busy[0].clone(),
@@ -1161,7 +1351,90 @@ async fn open_terminal(sh: State<'_, Shared>, agent_id: String) -> Res<()> {
     focus_agent(&sh, &agent_id).await.map_err(err)
 }
 
+// ---- the office's own terminals --------------------------------------------------------------
+
+/// Opens a terminal panel on one of the office's own terminals: what's on screen now, then
+/// everything it draws until the panel closes.
+#[tauri::command]
+fn terminal_attach(id: String, on_event: Channel<pty::Event>) -> Res<(u64, String)> {
+    if host_of(&id) != Host::Builtin {
+        return Err("That terminal isn't one of the office's".into());
+    }
+    pty::attach(&id, Box::new(move |e| {
+        let _ = on_event.send(e);
+    }))
+    .map_err(err)
+}
+
+#[tauri::command]
+fn terminal_detach(id: String, key: u64) {
+    pty::detach(&id, key);
+}
+
+#[tauri::command]
+fn terminal_write(id: String, data: String) -> Res<()> {
+    pty::write(&id, data.as_bytes()).map_err(err)
+}
+
+#[tauri::command]
+fn terminal_resize(id: String, cols: u16, rows: u16) -> Res<()> {
+    pty::resize(&id, cols, rows).map_err(err)
+}
+
+/// Lets go of a one-off terminal (a sign-in, say) when you close its panel: one that failed,
+/// once you've read why, or one you've walked away from, which nothing else could reopen.
+#[tauri::command]
+fn terminal_dismiss(id: String) {
+    if pty::is_utility(&id) {
+        pty::close(&id);
+    }
+}
+
+/// Signs in to Claude Code, in a terminal panel, for the office's own terminals.
+#[tauri::command]
+async fn claude_sign_in(sh: State<'_, Shared>) -> Res<()> {
+    let args = ["auth".to_string(), "login".into()];
+    open_utility(&sh, &args, "Sign in to Claude", "", None).await.map_err(err)
+}
+
+/// Quits, but first asks while agents in the office's own terminals are mid-task, since
+/// quitting stops them. They all come back on the next launch.
+fn request_quit(app: &AppHandle) {
+    let sh = app.state::<Shared>().inner().clone();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let busy = busy_names(&*sh.office.lock().await, true);
+        if busy.is_empty() {
+            app.exit(0);
+        } else {
+            show_window(&app);
+            let _ = app.emit("confirm-quit", busy);
+        }
+    });
+}
+
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
 // ---- setup ---------------------------------------------------------------------------------
+
+/// Where Claude Code is, for the office's own terminals. Empty looks on your login PATH.
+#[tauri::command]
+async fn set_claude_path(sh: State<'_, Shared>, path: String) -> Res<()> {
+    let path = path.trim().to_string();
+    if !path.is_empty() && pty::find_claude(&path).is_none() {
+        return Err("There's no program at that path".into());
+    }
+    let mut o = sh.office.lock().await;
+    o.p.claude_path = path;
+    o.live.claude = pty::find_claude(&o.p.claude_path);
+    o.save();
+    drop(o);
+    sh.nudge();
+    Ok(())
+}
 
 #[tauri::command]
 async fn install_hooks(sh: State<'_, Shared>) -> Res<()> {
@@ -1181,8 +1454,8 @@ async fn uninstall_hooks(sh: State<'_, Shared>) -> Res<()> {
 
 #[tauri::command]
 async fn set_host(sh: State<'_, Shared>, host: String) -> Res<()> {
-    if !matches!(host.as_str(), "auto" | "orca" | "cmux") {
-        return Err("Pick Automatic, Orca or cmux".into());
+    if !matches!(host.as_str(), "auto" | "orca" | "cmux" | "builtin") {
+        return Err("Pick Automatic, Orca, cmux or Built-in".into());
     }
     let mut o = sh.office.lock().await;
     o.p.host = if host == "auto" { String::new() } else { host };
@@ -1264,19 +1537,19 @@ async fn stop_agent(sh: State<'_, Shared>, agent_id: String) -> Res<String> {
         press_escape(&sh, &agent_id).await.map_err(err)?;
         return Ok("stopped".into());
     }
-    let screen = orca::read_screen(&agent_id).await.map_err(err)?;
+    let screen = read_screen(&agent_id).await.map_err(err)?;
     if !orca::has_queued(&screen) {
-        orca::press_escape(&agent_id).await.map_err(err)?;
+        press_escape(&sh, &agent_id).await.map_err(err)?;
         return Ok("stopped".into());
     }
     // Up brings every queued message back into the box; then clear it a line at a time
     // (Ctrl-U empties a line, Backspace joins it to the one above).
-    orca::send_keys(&agent_id, "\u{1b}[A").await.map_err(err)?;
+    send_keys(&agent_id, "\u{1b}[A").await.map_err(err)?;
     tokio::time::sleep(Duration::from_millis(400)).await;
-    let lines = orca::message_box(&orca::read_screen(&agent_id).await.map_err(err)?).len();
-    orca::send_keys(&agent_id, &"\u{15}\u{7f}".repeat((lines + 2).min(80))).await.map_err(err)?;
+    let lines = orca::message_box(&read_screen(&agent_id).await.map_err(err)?).len();
+    send_keys(&agent_id, &"\u{15}\u{7f}".repeat((lines + 2).min(80))).await.map_err(err)?;
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let left = orca::message_box(&orca::read_screen(&agent_id).await.map_err(err)?);
+    let left = orca::message_box(&read_screen(&agent_id).await.map_err(err)?);
     if !left.is_empty() {
         return Err(format!("Took your message back, but couldn't clear it from the box. Open the terminal to delete it: {}", brief::clip(&left.join(" "), 80)));
     }
@@ -1386,6 +1659,33 @@ fn sticky(e: &str) -> bool {
     ["Couldn't add", "Couldn't restart", "Couldn't bring"].iter().any(|p| e.starts_with(p))
 }
 
+/// Commands and messages waiting for agents that are now free, taken off their lists.
+fn due_commands(o: &mut Office) -> Vec<(String, Vec<String>)> {
+    // Only agents at rest: typed into a running turn, the command would wait as a message.
+    let free: Vec<(String, Vec<String>)> = o
+        .agents()
+        .into_iter()
+        .filter(|a| matches!(a.state.as_str(), "idle" | "done" | "needs_you") && a.ask.is_none())
+        // In the office's own terminals, only once the session has started (our hook has heard
+        // from it) and Claude's message box is showing.
+        .filter(|a| {
+            host_of(&a.id) != Host::Builtin
+                || (o.live.hook_status.contains_key(&a.id) && !o.live.blocked.contains_key(&a.id) && pty::ready(&pty::screen(&a.id)))
+        })
+        .filter_map(|a| {
+            let mut cmds = o.live.later.get(&a.id).cloned().unwrap_or_default();
+            // This Claude Code takes one server per `/mcp reconnect`; "all" isn't a name it knows.
+            cmds.extend(o.live.reconnect.get(&a.id).into_iter().flatten().map(|s| format!("/mcp reconnect {s}")));
+            (!cmds.is_empty()).then(|| (a.id.clone(), cmds))
+        })
+        .collect();
+    let alive: HashSet<String> = o.agents().into_iter().map(|a| a.id).collect();
+    let sent = |id: &String| free.iter().any(|(f, _)| f == id);
+    o.live.reconnect.retain(|id, _| alive.contains(id) && !sent(id));
+    o.live.later.retain(|id, _| alive.contains(id) && !sent(id));
+    free
+}
+
 async fn poll(app: AppHandle, sh: Shared) {
     let mut tick: u64 = 0;
     let mut last = String::new();
@@ -1402,6 +1702,7 @@ async fn poll(app: AppHandle, sh: Shared) {
             o.live.cmux_access = access;
             o.live.hooks_installed = hooks_on;
             o.live.mcp_known = mcp::configured();
+            o.live.claude = pty::find_claude(&o.p.claude_path);
             o.pick_host();
         }
         if tick % 60 == 0 || sh.force_structure.swap(false, Ordering::Relaxed) {
@@ -1437,6 +1738,18 @@ async fn poll(app: AppHandle, sh: Shared) {
             let fetched = if up { orca::accounts(stale).await.ok() } else { None };
             sh.office.lock().await.live.usage = fetched.map(|v| usage::parse(&v));
         }
+        // Without Orca, usage comes from the status line of the office's own terminals.
+        if tick % 10 == 3 {
+            let mut o = sh.office.lock().await;
+            if !o.live.orca_up {
+                let path = hooks::usage_path();
+                let at = std::fs::metadata(&path).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as i64);
+                o.live.usage = at.and_then(|at| {
+                    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
+                    usage::from_status_line(&v, at)
+                });
+            }
+        }
         sh.office.lock().await.refresh_hooks();
         let host = sh.office.lock().await.live.host;
         if host == Host::Orca && (tick % 3 == 0 || sh.force_terminals.swap(false, Ordering::Relaxed)) {
@@ -1457,6 +1770,17 @@ async fn poll(app: AppHandle, sh: Shared) {
         if host == Host::Cmux {
             let mut o = sh.office.lock().await;
             o.sync_cmux();
+            if o.live.error.as_deref().is_some_and(|e| !sticky(e)) {
+                o.live.error = None;
+            }
+            o.reconcile();
+        }
+        if host == Host::Builtin {
+            let mut o = sh.office.lock().await;
+            if !o.live.builtin_resumed && o.live.claude.is_some() {
+                resume_builtin(&mut o);
+            }
+            o.sync_builtin();
             if o.live.error.as_deref().is_some_and(|e| !sticky(e)) {
                 o.live.error = None;
             }
@@ -1483,23 +1807,7 @@ async fn poll(app: AppHandle, sh: Shared) {
                     o.live.reconnect.entry(id).or_default().insert(server.clone());
                 }
             }
-            // Only agents at rest: typed into a running turn, the command would wait as a message.
-            let free: Vec<(String, Vec<String>)> = o
-                .agents()
-                .into_iter()
-                .filter(|a| matches!(a.state.as_str(), "idle" | "done" | "needs_you") && a.ask.is_none())
-                .filter_map(|a| {
-                    let mut cmds = o.live.later.get(&a.id).cloned().unwrap_or_default();
-                    // This Claude Code takes one server per `/mcp reconnect`; "all" isn't a name it knows.
-                    cmds.extend(o.live.reconnect.get(&a.id).into_iter().flatten().map(|s| format!("/mcp reconnect {s}")));
-                    (!cmds.is_empty()).then(|| (a.id.clone(), cmds))
-                })
-                .collect();
-            let alive: HashSet<String> = o.agents().into_iter().map(|a| a.id).collect();
-            let sent = |id: &String| free.iter().any(|(f, _)| f == id);
-            o.live.reconnect.retain(|id, _| alive.contains(id) && !sent(id));
-            o.live.later.retain(|id, _| alive.contains(id) && !sent(id));
-            free
+            due_commands(&mut o)
         };
         for (id, cmds) in reconnect_now {
             let s = sh.clone();
@@ -1600,14 +1908,28 @@ pub fn run() {
             let office = Office::load(app.path().app_data_dir()?);
             office.write_contracts()?;
             let sh = Shared {
+                app: Some(app.handle().clone()),
                 office: Arc::new(Mutex::new(office)),
                 kick: Arc::new(Notify::new()),
                 force_terminals: Arc::new(AtomicBool::new(false)),
                 force_structure: Arc::new(AtomicBool::new(false)),
             };
             app.manage(sh.clone());
+            app.set_menu(menu(app.handle())?)?;
             tauri::async_runtime::spawn(poll(app.handle().clone(), sh));
             Ok(())
+        })
+        .on_menu_event(|app, e| {
+            if e.id() == "quit" {
+                request_quit(app);
+            }
+        })
+        // Closing the window hides it, so agents in the office's own terminals keep working.
+        .on_window_event(|w, e| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = e {
+                api.prevent_close();
+                let _ = w.hide();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             snapshot,
@@ -1652,10 +1974,45 @@ pub fn run() {
             helper_work,
             stop_agent,
             links,
-            open_link
+            open_link,
+            terminal_attach,
+            terminal_detach,
+            terminal_write,
+            terminal_resize,
+            terminal_dismiss,
+            claude_sign_in,
+            set_claude_path,
+            quit_app
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Agent Office");
+        .build(tauri::generate_context!())
+        .expect("error while starting Agent Office")
+        .run(|app, event| match event {
+            // Clicking the Dock icon brings a hidden window back.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => show_window(app),
+            tauri::RunEvent::Exit => pty::close_all(),
+            _ => {}
+        });
+}
+
+/// The app menu, with Quit going through `request_quit` so it can ask first.
+fn menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem as P, Submenu};
+    let quit = MenuItem::with_id(app, "quit", "Quit Agent Office", true, Some("CmdOrCtrl+Q"))?;
+    let app_menu = Submenu::with_items(
+        app,
+        "Agent Office",
+        true,
+        &[&P::about(app, Some("About Agent Office"), None)?, &P::separator(app)?, &P::hide(app, None)?, &P::hide_others(app, None)?, &P::show_all(app, None)?, &P::separator(app)?, &quit],
+    )?;
+    let edit = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[&P::undo(app, None)?, &P::redo(app, None)?, &P::separator(app)?, &P::cut(app, None)?, &P::copy(app, None)?, &P::paste(app, None)?, &P::select_all(app, None)?],
+    )?;
+    let window = Submenu::with_items(app, "Window", true, &[&P::minimize(app, None)?, &P::close_window(app, None)?])?;
+    Menu::with_items(app, &[&app_menu, &edit, &window])
 }
 
 #[cfg(test)]
@@ -1671,6 +2028,154 @@ mod tests {
         assert_eq!(own_attachments(&dir, vec![p.clone()]).unwrap(), vec![p]);
         assert!(own_attachments(&dir, vec!["/etc/hosts".into()]).is_err());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A hire in the office's own terminals, in a folder Claude hasn't been trusted with: the
+    /// task waits while Claude asks, then goes in once you've answered. Runs real Claude Code
+    /// (one short message on your plan): `cargo test hire_end_to_end -- --ignored --nocapture`.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn hire_end_to_end() {
+        let base = std::env::temp_dir().join(format!("ao-e2e-{}", uuid::Uuid::new_v4()));
+        let room = base.join("room");
+        std::fs::create_dir_all(&room).unwrap();
+        let room = room.canonicalize().unwrap().display().to_string();
+        let mut office = Office::load(base.join("data"));
+        office.p.host = "builtin".into();
+        office.p.cos_name = "Raggy".into();
+        office.p.folders = vec![room.clone()];
+        office.live.claude = pty::find_claude("");
+        office.write_contracts().unwrap();
+        office.pick_host();
+        assert_eq!(office.live.host, Host::Builtin);
+        let sh = Shared {
+            app: None,
+            office: Arc::new(Mutex::new(office)),
+            kick: Arc::new(Notify::new()),
+            force_terminals: Arc::new(AtomicBool::new(false)),
+            force_structure: Arc::new(AtomicBool::new(false)),
+        };
+        let tick = || async {
+            let mut o = sh.office.lock().await;
+            o.refresh_hooks();
+            o.sync_builtin();
+            o.reconcile();
+            o.refresh_helpers();
+            due_commands(&mut o)
+        };
+        let task = "Reply with just the word OK, then your brief.";
+        let id = spawn(&sh, &format!("dir:{room}"), None, "worker", Some(task.into()), None, None).await.unwrap();
+        tick().await;
+        {
+            let o = sh.office.lock().await;
+            let a = o.agents().into_iter().find(|a| a.id == id).unwrap();
+            eprintln!("before trusting: {} {:?}", a.state, a.brief.as_ref().map(|b| &b.headline));
+            assert_eq!(a.state, "needs_you", "Claude asking to trust the folder needs you");
+            assert_eq!(o.live.later.get(&id).map(|l| l.len()), Some(1), "the task waits");
+        }
+        // You open the terminal and trust the folder: down to "Yes", then Return.
+        for _ in 0..40 {
+            if pty::screen(&id).iter().any(|l| l.trim_start().starts_with("❯") && l.contains("Yes")) {
+                break;
+            }
+            pty::write(&id, b"\x1b[B").unwrap();
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        pty::write(&id, b"\r").unwrap();
+        let mut done = None;
+        for _ in 0..120 {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            for (to, cmds) in tick().await {
+                for c in cmds {
+                    send_to(&sh, &to, &c).await.unwrap();
+                }
+            }
+            let o = sh.office.lock().await;
+            let a = o.agents().into_iter().find(|a| a.id == id).unwrap();
+            if a.state == "done" {
+                done = Some(a);
+                break;
+            }
+        }
+        let a = done.expect("the agent finished");
+        eprintln!("finished: {} {:?} task={:?} prompt={:?}", a.name, a.brief.as_ref().map(|b| &b.headline), a.task, a.prompt);
+        assert_eq!(a.prompt.as_deref(), Some(task));
+        let m = sh.office.lock().await.p.managed.get(&id).cloned().unwrap();
+        assert!(transcript::path_for(&m.cwd, &m.session_id).exists(), "resuming will find its session");
+
+        // You quit; on the next launch the same agent comes back in its own session.
+        pty::close(&id);
+        for _ in 0..40 {
+            if !pty::alive(&id) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        resume_builtin(&mut *sh.office.lock().await);
+        assert!(pty::alive(&id), "started again under the same id");
+        let mut back = None;
+        for _ in 0..60 {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            tick().await;
+            let o = sh.office.lock().await;
+            if pty::ready(&pty::screen(&id)) {
+                back = o.agents().into_iter().find(|a| a.id == id);
+                break;
+            }
+        }
+        let back = back.expect("the agent is back at its desk");
+        eprintln!("back: {} {} prompt={:?}", back.name, back.state, back.prompt);
+        assert_eq!(back.name, a.name);
+        assert!(pty::screen(&id).iter().any(|l| l.contains("Reply with just the word OK")), "with its conversation");
+        pty::close(&id);
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// Showing another app, the office keeps agents in its own terminals in view as names, and a
+    /// new chief of staff there replaces one left running in them.
+    #[tokio::test]
+    async fn built_in_agents_out_of_sight() {
+        let base = std::env::temp_dir().join(format!("ao-away-{}", uuid::Uuid::new_v4()));
+        let worker = format!("{}away-w-{}", pty::PREFIX, uuid::Uuid::new_v4());
+        let cos = format!("{}away-c-{}", pty::PREFIX, uuid::Uuid::new_v4());
+        for id in [&worker, &cos] {
+            let argv = vec!["/bin/cat".to_string()];
+            pty::spawn(pty::Spawn { id: id.clone(), argv, cwd: std::env::temp_dir().display().to_string(), env: vec![], utility: false }).unwrap();
+        }
+        let mut office = Office::load(base.clone());
+        office.p.cos_name = "Penny".into();
+        office.p.names.insert(worker.clone(), "Jude".into());
+        office.p.cos_handle = Some(cos.clone());
+        office.p.managed.insert(cos.clone(), Managed { role: "cos".into(), ..Default::default() });
+        office.live.host = Host::Builtin;
+        assert!(office.hidden_builtin().is_empty(), "in view on Built-in");
+        office.live.host = Host::Cmux;
+        // Other tests run terminals of their own at the same time; only these two count here.
+        let mut names: Vec<String> = office.hidden_builtin().into_iter().filter(|(id, _)| *id == worker || *id == cos).map(|(_, n)| n).collect();
+        names.sort();
+        assert_eq!(names, ["Jude", "Penny"]);
+        let sh = Shared {
+            app: None,
+            office: Arc::new(Mutex::new(office)),
+            kick: Arc::new(Notify::new()),
+            force_terminals: Arc::new(AtomicBool::new(false)),
+            force_structure: Arc::new(AtomicBool::new(false)),
+        };
+        // cmux has no hook here, so the new chief of staff can't start; the old one still goes.
+        assert!(ensure_cos(&sh).await.is_err());
+        for _ in 0..40 {
+            if !pty::alive(&cos) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(!pty::alive(&cos), "the old chief of staff is closed");
+        assert!(pty::alive(&worker), "workers keep going");
+        let o = sh.office.lock().await;
+        assert!(o.p.cos_handle.is_none() && !o.p.managed.contains_key(&cos));
+        drop(o);
+        pty::close(&worker);
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]

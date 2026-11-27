@@ -587,7 +587,7 @@ export function AgentDialog({
           <MoreMenu
             items={[
               { label: `Open in ${host}`, onClick: () => api.openTerminal(agent.id) },
-              { label: "Remove", danger: true, confirm: `Close ${agent.name}'s tab`, onClick: () => api.removeAgent(agent.id).then(onClose) },
+              { label: "Remove", danger: true, confirm: `Close ${agent.name}'s ${host === "the terminal" ? "terminal" : "tab"}`, onClick: () => api.removeAgent(agent.id).then(onClose) },
             ]}
           />
         </>
@@ -623,14 +623,14 @@ export function AgentDialog({
       )}
       {agent.ask ? <AskForm agent={agent} host={host} /> : !busy && agent.brief && <BriefView agent={agent} />}
       {!busy && !agent.brief && !(events ?? []).length && <p className="quiet">Nothing to report yet.</p>}
-      {agent.state === "waiting" && (
+      {(agent.state === "waiting" || agent.blocked) && (
         <button className="btn primary" onClick={() => api.openTerminal(agent.id)}>
           Answer in {host}
         </button>
       )}
       {notice && <p className="notice">{notice}</p>}
       <Links agent={agent} />
-      {agent.state !== "waiting" && !agent.ask && (
+      {agent.state !== "waiting" && !agent.blocked && !agent.ask && (
         <Reply
           agent={agent}
           restore={restore}

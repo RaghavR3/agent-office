@@ -54,6 +54,8 @@ pub struct Persisted {
     /// Which terminal app to show: "auto" (Orca when it's running, else cmux), "orca" or "cmux".
     pub host: String,
     pub cmux_password: String,
+    /// Where `claude` is, when it isn't on your login PATH.
+    pub claude_path: String,
     /// The rooms when the office runs on cmux, as folder paths.
     pub folders: Vec<String>,
     /// Names you gave sessions, by agent; shown as what they're on.
@@ -246,6 +248,8 @@ pub struct AgentView {
     pub desk: Option<u32>,
     /// Tool calls in its current session: how much paper is on the desk.
     pub work: u32,
+    /// Claude is on a screen only you can answer in its terminal, like trusting a folder.
+    pub blocked: bool,
     #[serde(skip)]
     pub transcript: Option<PathBuf>,
 }
@@ -283,6 +287,11 @@ pub struct Setup {
     /// Why the office can't drive cmux, when it can't.
     pub cmux_access: Option<String>,
     pub cmux_password: bool,
+    /// Whether Claude Code was found, for the office's own terminals.
+    pub claude: bool,
+    pub claude_path: String,
+    /// Agents still running in the office's own terminals while it shows another app, out of sight.
+    pub elsewhere: Vec<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
@@ -290,6 +299,19 @@ pub enum Host {
     #[default]
     Orca,
     Cmux,
+    /// The office's own terminals, so nothing but Claude Code is needed.
+    Builtin,
+}
+
+/// Which terminal app an agent's id belongs to.
+pub fn host_of(handle: &str) -> Host {
+    if handle.starts_with("cmux:") {
+        Host::Cmux
+    } else if handle.starts_with(crate::pty::PREFIX) {
+        Host::Builtin
+    } else {
+        Host::Orca
+    }
 }
 
 pub struct Pending {
@@ -337,6 +359,13 @@ pub struct Live {
     pub orca_up: bool,
     pub cmux_up: bool,
     pub cmux_access: Option<String>,
+    /// Claude Code, for the office's own terminals.
+    pub claude: Option<PathBuf>,
+    /// Whether agents left running in the office's own terminals have been started again.
+    pub builtin_resumed: bool,
+    /// Agents whose Claude is stuck on a screen only you can answer (trusting a folder,
+    /// signing in), with why and since when.
+    pub blocked: HashMap<String, (String, i64)>,
     pub hooks_installed: bool,
     pub hooks: HookCache,
     /// Our hook's view of each agent, keyed like agents are (Orca handle or "cmux:<surface>").
@@ -429,7 +458,7 @@ impl Office {
 
     /// Every room the terminal app knows, under its own names.
     fn all_rooms(&self) -> Vec<Room> {
-        if self.live.host == Host::Cmux {
+        if self.live.host != Host::Orca {
             return self.folder_rooms();
         }
         let mut out = vec![];
@@ -488,7 +517,8 @@ impl Office {
         out
     }
 
-    /// With cmux, rooms are folders: ones you added, and ones Claude has run in.
+    /// With cmux or the office's own terminals, rooms are folders: ones you added, and ones
+    /// Claude has run in. A repo's git worktrees are its areas.
     fn folder_rooms(&self) -> Vec<Room> {
         self.p
             .folders
@@ -502,11 +532,22 @@ impl Office {
                     path: path.clone(),
                     kind: if Path::new(path).join(".git").exists() { "repo" } else { "folder" }.into(),
                     color: None,
-                    areas: vec![],
+                    areas: worktree_areas(path),
                     selector: String::new(),
                 }
             })
             .collect()
+    }
+
+    /// The room a folder belongs to, and the area within it: the deepest match wins.
+    fn folder_place(rooms: &[Room], cwd: &str) -> (String, Option<String>) {
+        let within = |p: &str| cwd == p || cwd.starts_with(&format!("{p}/"));
+        let area = rooms.iter().flat_map(|r| r.areas.iter().map(move |a| (r, a))).filter(|(_, a)| within(&a.path)).max_by_key(|(_, a)| a.path.len());
+        if let Some((r, a)) = area {
+            return (r.id.clone(), Some(a.name.clone()));
+        }
+        let room = rooms.iter().filter(|r| within(&r.path)).max_by_key(|r| r.path.len());
+        (room.map(|r| r.id.clone()).unwrap_or_default(), None)
     }
 
     /// Makes a room for a folder Claude runs in, unless one already covers it.
@@ -518,6 +559,8 @@ impl Office {
         let dir = Path::new(cwd);
         // The repo it's in, if any, so a session in a subfolder doesn't get a room of its own.
         let root = dir.ancestors().take_while(|a| *a != home).find(|a| a.join(".git").exists()).unwrap_or(dir);
+        // A linked worktree is an area of its repo, not a room of its own.
+        let root = main_checkout(root).unwrap_or_else(|| root.to_path_buf());
         let root = root.display().to_string();
         let skip = root == home.display().to_string() || root == "/" || ["/tmp", "/private", "/var", "/Volumes"].iter().any(|p| root.starts_with(p));
         if skip || self.p.folders.contains(&root) {
@@ -538,7 +581,7 @@ impl Office {
 
     /// Where the chief of staff sits in the terminal app. Its room in the office is always HQ.
     pub fn hq_room(&self) -> Option<Room> {
-        if self.live.host == Host::Cmux {
+        if self.live.host != Host::Orca {
             let home = dirs::home_dir().unwrap_or_default();
             let docs = home.join("Documents");
             let path = if docs.is_dir() { docs } else { home };
@@ -672,9 +715,9 @@ impl Office {
         }
         let live: HashSet<&str> =
             self.live.terminals.iter().filter_map(|t| t["handle"].as_str()).collect();
-        // Agents in the other terminal app keep their names for when you switch back.
-        let cmux = self.live.host == Host::Cmux;
-        let keep = |h: &str| h.starts_with("cmux:") != cmux || live.contains(h);
+        // Agents in another terminal app keep their names for when you switch back.
+        let host = self.live.host;
+        let keep = |h: &str| host_of(h) != host || live.contains(h);
         // Remember whoever's leaving by their session's title, in case the session comes back.
         let now = now_ms();
         let mut leaving: Vec<String> = self.p.names.keys().filter(|h| !keep(h)).cloned().collect();
@@ -730,8 +773,8 @@ impl Office {
         self.p.titles.extend(titles);
         let a = self.prune();
         let live: HashSet<String> = self.live.terminals.iter().filter_map(|t| t["handle"].as_str().map(str::to_string)).collect();
-        let cmux = self.live.host == Host::Cmux;
-        self.p.cleared_titles.retain(|h, _| h.starts_with("cmux:") != cmux || live.contains(h));
+        let host = self.live.host;
+        self.p.cleared_titles.retain(|h, _| host_of(h) != host || live.contains(h));
         let b = self.ensure_names();
         for t in &self.live.terminals {
             let (Some(h), Some(inc)) = (t["handle"].as_str(), t["incarnationId"].as_str()) else { continue };
@@ -781,9 +824,10 @@ impl Office {
         self.live.hooks.refresh();
         let mut newest: HashMap<String, Session> = HashMap::new();
         for s in self.live.hooks.sessions() {
-            let key = match (&s.orca, &s.surface) {
-                (Some(h), _) => h.clone(),
-                (None, Some(surface)) => format!("cmux:{surface}"),
+            let key = match (&s.orca, &s.surface, &s.pty) {
+                (Some(h), _, _) => h.clone(),
+                (None, Some(surface), _) => format!("cmux:{surface}"),
+                (None, None, Some(pty)) => pty.clone(),
                 _ => continue,
             };
             if newest.get(&key).is_none_or(|o| s.at_ms >= o.at_ms) {
@@ -851,12 +895,7 @@ impl Office {
         self.live.terminals = sessions
             .iter()
             .map(|s| {
-                let room = rooms
-                    .iter()
-                    .filter(|r| s.cwd == r.path || s.cwd.starts_with(&format!("{}/", r.path)))
-                    .max_by_key(|r| r.path.len())
-                    .map(|r| r.id.clone())
-                    .unwrap_or_default();
+                let (room, area) = Self::folder_place(&rooms, &s.cwd);
                 json!({
                     "handle": format!("cmux:{}", s.surface.as_deref().unwrap_or_default()),
                     "agentIdentity": "claude",
@@ -865,6 +904,60 @@ impl Office {
                     "lastOutputAt": s.at_ms,
                     "workspace": s.workspace,
                     "cwd": s.cwd,
+                    "area": area,
+                })
+            })
+            .collect();
+    }
+
+    /// With the office's own terminals, the agents are the Claude sessions running in them.
+    pub fn sync_builtin(&mut self) {
+        let terms = crate::pty::list();
+        let mut newest: HashMap<String, Session> = HashMap::new();
+        for s in self.live.hooks.sessions() {
+            let Some(id) = &s.pty else { continue };
+            if newest.get(id).is_none_or(|o| s.at_ms >= o.at_ms) {
+                newest.insert(id.clone(), s.clone());
+            }
+        }
+        // A session moves on after /clear; the next launch resumes the one it's on now.
+        let mut moved = false;
+        for (id, s) in newest.iter().filter(|(_, s)| !s.ended()) {
+            if let Some(m) = self.p.managed.get_mut(id).filter(|m| m.session_id != s.session_id) {
+                m.session_id = s.session_id.clone();
+                moved = true;
+            }
+        }
+        if moved {
+            self.save();
+        }
+        // Claude stuck on a screen only you can answer: the agent asks for you until it's past it.
+        let now = now_ms();
+        let was = std::mem::take(&mut self.live.blocked);
+        for t in terms.iter().filter(|t| !t.utility && t.exit.is_none()) {
+            if let Some(why) = crate::pty::waiting_on_you(&crate::pty::screen(&t.id)) {
+                let since = was.get(&t.id).map(|(_, at)| *at).unwrap_or(now);
+                self.live.blocked.insert(t.id.clone(), (why.to_string(), since));
+            }
+        }
+        // A sign-in that failed stays on screen to be read, and doesn't count as signed in.
+        for t in terms.iter().filter(|t| t.utility && t.exit.is_some_and(|c| c != 0)) {
+            self.live.signins.remove(&t.id);
+        }
+        let rooms = self.folder_rooms();
+        self.live.terminals = terms
+            .iter()
+            .map(|t| {
+                let (room, area) = Self::folder_place(&rooms, &t.cwd);
+                json!({
+                    "handle": t.id,
+                    "agentIdentity": if t.utility { "utility" } else { "claude" },
+                    "worktreeId": room,
+                    "title": t.title,
+                    "lastOutputAt": t.last_output,
+                    "cwd": t.cwd,
+                    "area": area,
+                    "connected": t.exit.is_none(),
                 })
             })
             .collect();
@@ -897,12 +990,17 @@ impl Office {
             .or_else(|| self.p.managed.get(id).and_then(|m| m.workspace.clone()))
     }
 
+    /// Automatic: Orca when it's running, then cmux, then the office's own terminals. While
+    /// agents are running in the office's own terminals, it stays on them.
     pub fn pick_host(&mut self) {
         self.live.host = match self.p.host.as_str() {
             "cmux" => Host::Cmux,
             "orca" => Host::Orca,
-            _ if !self.live.orca_up && self.live.cmux_up => Host::Cmux,
-            _ => Host::Orca,
+            "builtin" => Host::Builtin,
+            _ if crate::pty::list().iter().any(|t| !t.utility) => Host::Builtin,
+            _ if self.live.orca_up => Host::Orca,
+            _ if self.live.cmux_up => Host::Cmux,
+            _ => Host::Builtin,
         };
     }
 
@@ -931,6 +1029,13 @@ impl Office {
                 brief = None;
                 activity = Some("Switching account".into());
             }
+            // Claude is stuck on a screen only you can answer, like trusting a new folder.
+            let blocked = self.live.blocked.get(&handle);
+            if let Some((why, _)) = blocked {
+                state = "needs_you".into();
+                activity = None;
+                brief = Some(Brief { status: "needs_input".into(), headline: why.clone(), ..Default::default() });
+            }
             // Claude's question box shows as a permission wait; it's really a question for you.
             let ask = self.live.asks.get(&handle).filter(|_| state == "waiting").cloned();
             if let Some(qs) = &ask {
@@ -956,7 +1061,7 @@ impl Office {
             }
             // Status feeds re-stamp the time on every event, a helper's included; only a new state
             // or message counts as something new.
-            let raw_at = status.map(|s| s.updated_at).unwrap_or(0);
+            let raw_at = blocked.map(|(_, at)| *at).unwrap_or_else(|| status.map(|s| s.updated_at).unwrap_or(0));
             let updated_at = match self.live.stable.get(&handle) {
                 Some((sig, at)) if *sig == signature(&state, brief.as_ref()) => *at,
                 _ => raw_at,
@@ -983,6 +1088,7 @@ impl Office {
                 ask,
                 desk: self.p.desks.get(&handle).copied(),
                 work: self.live.work.get(&handle).copied().unwrap_or(0),
+                blocked: blocked.is_some(),
                 prompt: self
                     .live
                     .prompts
@@ -1000,7 +1106,7 @@ impl Office {
                     let asked = managed.and_then(|m| m.task.clone()).or_else(|| status.and_then(|s| s.prompt.clone()).filter(|_| title.is_empty()));
                     task_label(asked.as_deref(), &title, self.p.names.get(&handle))
                 },
-                area: if is_cos { None } else { self.area_of(worktree_id) },
+                area: if is_cos { None } else { self.area_of(worktree_id).or_else(|| t["area"].as_str().map(str::to_string)) },
                 title,
                 state,
                 brief,
@@ -1029,6 +1135,7 @@ impl Office {
                 ask: None,
                 desk: p.desk,
                 work: 0,
+                blocked: false,
                 area: p.area.clone(),
                 transcript: None,
             });
@@ -1151,7 +1258,11 @@ impl Office {
         requests.reverse();
         requests.truncate(12);
         Snapshot {
-            connected: if self.live.host == Host::Cmux { self.live.cmux_up } else { self.live.error.is_none() },
+            connected: match self.live.host {
+                Host::Cmux => self.live.cmux_up,
+                Host::Builtin => self.live.claude.is_some(),
+                Host::Orca => self.live.error.is_none(),
+            },
             error: self.live.error.clone(),
             rooms: self.rooms(),
             hidden_rooms: self.hidden_rooms(),
@@ -1176,13 +1287,20 @@ impl Office {
                 list
             },
             setup: Setup {
-                host: if self.live.host == Host::Cmux { "cmux" } else { "orca" },
+                host: match self.live.host {
+                    Host::Cmux => "cmux",
+                    Host::Builtin => "builtin",
+                    Host::Orca => "orca",
+                },
                 preference: if self.p.host.is_empty() { "auto".into() } else { self.p.host.clone() },
                 orca: self.live.orca_up,
                 cmux: self.live.cmux_up,
                 hooks: self.live.hooks_installed,
                 cmux_access: self.live.cmux_access.clone(),
                 cmux_password: !self.p.cmux_password.is_empty(),
+                claude: self.live.claude.is_some(),
+                claude_path: self.p.claude_path.clone(),
+                elsewhere: self.hidden_builtin().into_iter().map(|(_, name)| name).collect(),
             },
         }
     }
@@ -1200,6 +1318,25 @@ impl Office {
             .and_then(|m| m.incarnation.as_deref().zip(t["incarnationId"].as_str()))
             .is_some_and(|(was, now)| was != now);
         (started_here.is_none() || relaunched).then_some(h)
+    }
+
+    /// Agents running in the office's own terminals while it shows another app, by id and name.
+    pub fn hidden_builtin(&self) -> Vec<(String, String)> {
+        if self.live.host == Host::Builtin {
+            return vec![];
+        }
+        crate::pty::list()
+            .into_iter()
+            .filter(|t| !t.utility && t.exit.is_none())
+            .map(|t| {
+                let name = if self.p.cos_handle.as_deref() == Some(t.id.as_str()) {
+                    self.cos_name()
+                } else {
+                    self.p.names.get(&t.id).cloned().unwrap_or_else(|| "An agent".into())
+                };
+                (t.id, name)
+            })
+            .collect()
     }
 
     pub fn cos_alive(&self) -> Option<String> {
@@ -1447,7 +1584,11 @@ fn activity(s: &PaneStatus) -> Option<String> {
                 .and_then(|c| c.split_whitespace().find(|w| !w.contains('=')))
                 .map(|w| w.rsplit('/').next().unwrap_or(w).to_string())
                 .filter(|w| w.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'));
-            cmd.map(|c| format!("Running {c}")).unwrap_or_else(|| "Running a command".into())
+            match cmd.as_deref() {
+                Some("for" | "while" | "until") => "Running a loop".into(),
+                Some("if" | "case" | "then" | "do" | "{" | "(") | None => "Running a command".into(),
+                Some(c) => format!("Running {c}"),
+            }
         }
         t if t.starts_with("mcp__") => {
             let server = t[5..].split("__").next().unwrap_or("").trim_start_matches("claude_ai_").replace(['_', '-'], " ");
@@ -1550,6 +1691,45 @@ pub fn with_files(text: &str, files: &[String]) -> String {
     }
     let lines: Vec<String> = files.iter().map(|f| format!("[Attached file: {f}]")).collect();
     format!("{}\n\n{}", text.trim(), lines.join("\n")).trim().to_string()
+}
+
+/// The branch a git HEAD file points at.
+fn branch(head: &Path) -> Option<String> {
+    let h = std::fs::read_to_string(head).ok()?;
+    h.trim().strip_prefix("ref: refs/heads/").map(str::to_string)
+}
+
+/// The main checkout of a linked worktree, from the `gitdir:` line in its `.git` file.
+fn main_checkout(dir: &Path) -> Option<PathBuf> {
+    let link = std::fs::read_to_string(dir.join(".git")).ok()?;
+    let gitdir = PathBuf::from(link.trim().strip_prefix("gitdir:")?.trim());
+    let dotgit = gitdir.ancestors().find(|a| a.file_name().is_some_and(|n| n == ".git"))?;
+    dotgit.parent().map(Path::to_path_buf)
+}
+
+/// A repo's git worktrees, as areas, its main checkout first. None when it has only the one.
+fn worktree_areas(path: &str) -> Vec<Area> {
+    let git = Path::new(path).join(".git");
+    let Ok(dir) = std::fs::read_dir(git.join("worktrees")) else { return vec![] };
+    let mut areas: Vec<Area> = dir
+        .flatten()
+        .filter_map(|e| {
+            let gitdir = std::fs::read_to_string(e.path().join("gitdir")).ok()?;
+            let wt = Path::new(gitdir.trim()).parent()?.to_path_buf();
+            wt.is_dir().then(|| Area {
+                id: format!("wt:{}", wt.display()),
+                name: branch(&e.path().join("HEAD")).unwrap_or_else(|| e.file_name().to_string_lossy().into_owned()),
+                path: wt.display().to_string(),
+            })
+        })
+        .collect();
+    if areas.is_empty() {
+        return vec![];
+    }
+    areas.sort_by(|a, b| a.name.cmp(&b.name));
+    let main = Area { id: format!("wt:{path}"), name: branch(&git.join("HEAD")).unwrap_or_else(|| "main".into()), path: path.to_string() };
+    areas.insert(0, main);
+    areas
 }
 
 pub fn sh_quote(s: &str) -> String {

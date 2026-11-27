@@ -61,6 +61,15 @@ fn limits(rl: &Value) -> Option<Limits> {
     })
 }
 
+/// Plan usage from Claude's own status-line data, which the office's own terminals save.
+/// Its reset times are in seconds.
+pub fn from_status_line(v: &Value, at_ms: i64) -> Option<Usage> {
+    let rl = &v["rate_limits"];
+    let w = |x: &Value| Some(Window { used: x["used_percentage"].as_f64()?.clamp(0.0, 100.0), resets_at: x["resets_at"].as_i64().unwrap_or(0) * 1000 });
+    let limits = Limits { session: w(&rl["five_hour"]), week: w(&rl["seven_day"]), fable: None, updated_at: at_ms, error: None };
+    (limits.session.is_some() || limits.week.is_some()).then(|| Usage { accounts: vec![], limits: Some(limits) })
+}
+
 /// "Acme", or "Personal" for the organisation Claude makes for an individual plan.
 fn account_name(org: &str, email: &str) -> String {
     let org = org.trim();
@@ -105,6 +114,16 @@ pub fn parse(v: &Value) -> Usage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_usage_from_the_status_line() {
+        let v = serde_json::json!({ "rate_limits": { "five_hour": { "used_percentage": 22, "resets_at": 1795767600 }, "seven_day": { "used_percentage": 26, "resets_at": 1796122800 } } });
+        let l = from_status_line(&v, 5).unwrap().limits.unwrap();
+        assert_eq!(l.session, Some(Window { used: 22.0, resets_at: 1_795_767_600_000 }));
+        assert_eq!(l.week.map(|w| w.used), Some(26.0));
+        assert_eq!(l.updated_at, 5);
+        assert!(from_status_line(&serde_json::json!({ "model": {} }), 5).is_none(), "no limits, no bar");
+    }
     use serde_json::json;
 
     #[test]

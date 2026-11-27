@@ -9,6 +9,8 @@ import { AgentDialog } from "./ui/AgentDialog";
 import { CosDialog } from "./ui/CosDialog";
 import { HireDialog } from "./ui/HireDialog";
 import { NameCosDialog } from "./ui/NameCosDialog";
+import { QuitDialog } from "./ui/QuitDialog";
+import { TerminalPanel } from "./ui/TerminalPanel";
 import { SettingsDialog } from "./ui/SettingsDialog";
 import { Toasts } from "./ui/Toasts";
 
@@ -37,14 +39,23 @@ export default function App() {
   const [open, setOpen] = useState<Open>(null);
   const [travel, setTravel] = useState<{ id: string; n: number } | null>(null);
   const [team, setTeam] = useState(false);
+  /** One of the office's own terminals, open in the panel. */
+  const [terminal, setTerminal] = useState<string | null>(null);
+  const [quitting, setQuitting] = useState<string[] | null>(null);
+  const terminalRef = useRef(terminal);
+  terminalRef.current = terminal;
   const world = useRef<World | null>(null);
   const now = useNow(30_000);
 
   useEffect(() => {
     api.snapshot().then(setSnap);
-    const un = listen<Snapshot>("snapshot", (e) => setSnap(e.payload));
+    const un = [
+      listen<Snapshot>("snapshot", (e) => setSnap(e.payload)),
+      listen<string>("open-terminal", (e) => setTerminal(e.payload)),
+      listen<string[]>("confirm-quit", (e) => setQuitting(e.payload)),
+    ];
     return () => {
-      un.then((f) => f());
+      un.forEach((u) => u.then((f) => f()));
     };
   }, []);
 
@@ -59,6 +70,7 @@ export default function App() {
   }, []);
   const openCos = useCallback(() => setOpen({ kind: "cos" }), []);
   const close = useCallback(() => setOpen(null), []);
+  const closeTerminal = useCallback(() => setTerminal(null), []);
 
   const waiting = snap ? needsList(snap) : [];
   const finished = snap ? finishedList(snap) : [];
@@ -68,6 +80,8 @@ export default function App() {
   useEffect(() => {
     let cursor = 0;
     const onKey = (e: KeyboardEvent) => {
+      // Keys belong to Claude while its terminal is open.
+      if (terminalRef.current) return;
       if (e.metaKey && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setOpen({ kind: "cos" });
@@ -111,7 +125,7 @@ export default function App() {
         selected={agent?.id ?? (open?.kind === "cos" ? (cosAgent?.id ?? null) : null)}
         travel={travel}
         cosState={cosState}
-        dialogOpen={!!open}
+        dialogOpen={!!open || !!terminal}
         onWorld={(w) => (world.current = w)}
         onOpenAgent={(id) => setOpen({ kind: "agent", id })}
         onOpenCos={openCos}
@@ -132,29 +146,41 @@ export default function App() {
       />
       <Toasts requests={snap.requests} onGo={goTo} />
 
-      {!snap.connected && !open && (
+      {!snap.connected && !open && !terminal && snap.setup.host === "builtin" && (
         <div className="notice">
-          <h2>{snap.setup.preference === "auto" ? "Orca and cmux aren't running" : `${host} isn't running`}</h2>
+          <h2>Claude Code isn't installed</h2>
           <p>
-            Agent Office shows the Claude Code sessions you run in Orca or cmux. Open one and the office fills in by itself.
+            The office runs your agents in Claude Code, on your own Claude plan. Install it from claude.com/claude-code, or tell
+            the office where it is in Settings.
           </p>
           <button className="btn ghost" onClick={openSettings}>
             Settings
           </button>
         </div>
       )}
-      {snap.connected && snap.rooms.length === 0 && !open && (
+      {!snap.connected && !open && !terminal && snap.setup.host !== "builtin" && (
+        <div className="notice">
+          <h2>{`${host} isn't running`}</h2>
+          <p>Agent Office shows the Claude Code sessions you run in {host}. Open it and the office fills in by itself, or switch to the office's own terminals in Settings.</p>
+          <button className="btn ghost" onClick={openSettings}>
+            Settings
+          </button>
+        </div>
+      )}
+      {snap.connected && snap.rooms.length === 0 && !open && !terminal && (
         <div className="notice">
           <h2>No rooms yet</h2>
           {snap.setup.host === "orca" ? (
             <p>Each repo or folder you add to Orca becomes a room here. Add one in Orca to open the office.</p>
+          ) : snap.setup.host === "builtin" ? (
+            <p>A room is a folder your agents work in, usually a code repo. Add one and hire your first agent there.</p>
           ) : (
             <p>
               Start Claude in a cmux terminal and its folder becomes a room, or add a folder yourself.
               {!snap.setup.hooks && " First, install the status hook in Settings so the office can see your sessions."}
             </p>
           )}
-          {snap.setup.host === "cmux" && (
+          {snap.setup.host !== "orca" && (
             <div className="notice-actions">
               <button className="btn ghost" onClick={openSettings}>
                 Settings
@@ -183,6 +209,19 @@ export default function App() {
       {open?.kind === "addroom" && <AddRoomDialog host={host} onClose={close} />}
       {open?.kind === "settings" && <SettingsDialog setup={snap.setup} onClose={close} />}
       {open?.kind === "name" && <NameCosDialog name={snap.cosName} onClose={close} />}
+      {quitting && <QuitDialog names={quitting} onClose={() => setQuitting(null)} />}
+      {terminal && (
+        <TerminalPanel
+          key={terminal}
+          id={terminal}
+          title={(() => {
+            const a = snap.agents.find((x) => x.id === terminal);
+            return a ? `${a.name}'s terminal` : "Terminal";
+          })()}
+          oneOff={!snap.agents.some((x) => x.id === terminal)}
+          onClose={closeTerminal}
+        />
+      )}
     </div>
   );
 }

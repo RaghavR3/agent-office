@@ -105,7 +105,7 @@ export function HireDialog({
           autoFocus
         />
         <div className="handoff-row">
-          <span className="quiet">They open as a new Claude session in {host}.</span>
+          <span className="quiet">They open as a new Claude session{host === "the terminal" ? "" : ` in ${host}`}.</span>
           <button type="submit" className="btn primary">
             Hire
           </button>
