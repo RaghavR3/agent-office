@@ -56,6 +56,8 @@ export interface Layout {
   cos: { x: number; y: number };
   reception: { x: number; y: number };
   spawn: { x: number; y: number };
+  /** The open middle of the office, in tiles: left and right floor columns, top and bottom rows. */
+  atrium: { x0: number; x1: number; y0: number; y1: number };
   key: string;
 }
 
@@ -249,8 +251,49 @@ export function layoutOffice(rooms: Room[], counts: Map<string, number>): Layout
     cos: { x: cx, y: cy + 0.95 }, // just behind the desk, so it hides their legs
     reception: { x: cx, y: cy },
     spawn: { x: cx, y: cy + 2.8 },
+    atrium: { x0: ax0, x1: ax1, y0: bandY0, y1: bandY0 + bandH - 1 },
     key,
   };
+}
+
+/** The same office as a dream house: the atrium gets a pool with a slide and sun loungers, a
+ * heart rug goes under the front desk, and a convertible parks at the end of a hall. Rooms, desks
+ * and doors stay where they are, and nothing new stands in a doorway or on a path. */
+export function dreamHouse(l: Layout): Layout {
+  const { x0: ax0, x1: ax1, y1: ay1 } = l.atrium;
+  const cx = Math.floor(l.reception.x);
+  const cy = Math.floor(l.reception.y);
+  const props: Prop[] = [];
+  for (const p of l.props) {
+    if (p.kind === "rug-hall") {
+      // A heart under the front desk, its point just below the desk.
+      props.push({ kind: "rug-heart", x: cx - 4, y: cy - 1, w: 8, h: 4 });
+      continue;
+    }
+    // The hall's far right end, low down: the driveway.
+    if (p.kind === "tree" && p.x > cx && p.y > cy) {
+      props.push({ ...p, kind: "convertible" });
+      continue;
+    }
+    props.push(p);
+  }
+  // The pool fills the atrium's lower left, clear of the side doors (two columns in from the
+  // walls) and below where you start. Too small an atrium gets no pool.
+  const px0 = ax0 + 2;
+  const px1 = Math.min(cx - 2, px0 + 7);
+  const py0 = cy + 3;
+  const py1 = Math.min(ay1, py0 + 2);
+  if (px1 - px0 >= 3 && py1 - py0 >= 1) {
+    props.push({ kind: "pool", x: px0, y: py0, w: px1 - px0 + 1, h: py1 - py0 + 1, blocks: true });
+    props.push({ kind: "slide", x: px0, y: py0 - 1, w: 1, h: 1, blocks: true });
+  }
+  // Loungers under an umbrella to the lower right, clear of the entrance and the side doors.
+  const free = (x: number) => x <= ax1 - 2;
+  const ly = Math.min(cy + 4, ay1 - 1);
+  if (free(cx + 5)) props.push({ kind: "lounger", x: cx + 5, y: ly, w: 1, h: 2, blocks: true });
+  if (free(cx + 6)) props.push({ kind: "umbrella", x: cx + 6, y: ly, w: 1, h: 1, blocks: true });
+  if (free(cx + 7)) props.push({ kind: "lounger", x: cx + 7, y: ly, w: 1, h: 2, blocks: true });
+  return { ...l, props };
 }
 
 export function tileAt(l: Layout, x: number, y: number): number {

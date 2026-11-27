@@ -2,7 +2,7 @@
 // frame only while something moves, and drops to a slow tick when the office is quiet.
 
 import { type Agent, type Room, areaColor } from "../api";
-import { Layout, PITCH, RoomBox, layoutOffice } from "./layout";
+import { Layout, PITCH, RoomBox, dreamHouse, layoutOffice } from "./layout";
 import { NavGrid } from "./nav";
 import { Dir, Frames, SCREEN, TILE, YOU, chairSprite, currentTheme, deskSprite, figureFrames, floorLayer, lookForAgent, outlined, propSprite, scene } from "./art";
 
@@ -349,7 +349,9 @@ export class World {
 
   private rebuild(l: Layout) {
     this.layout = l;
-    this.floor = floorLayer(l);
+    // The dream house keeps every room, desk and door, and changes what stands around them.
+    const look = this.theme === "summer" ? dreamHouse(l) : l;
+    this.floor = floorLayer(look);
     if (furnished !== currentTheme()) {
       DESK = outlined(deskSprite());
       CHAIR = outlined(chairSprite());
@@ -364,7 +366,7 @@ export class World {
         if (t === 1 || t === 0) nav.block(i + l.ox, j, i + l.ox + 0.999, j + 0.999, 0.28);
       }
     this.props = [];
-    for (const p of l.props) {
+    for (const p of look.props) {
       const s = propSprite(p.kind);
       if (p.blocks) nav.block(p.x, p.y, p.x + p.w - 0.001, p.y + p.h - 0.001, 0.25);
       if (!s) continue;

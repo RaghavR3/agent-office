@@ -183,6 +183,101 @@ function wallTile(g: Ctx, x: number, y: number, front: boolean) {
   rect(g, x, y + 4, TILE, 10, P.wallFace);
   rect(g, x, y + 11, TILE, 3, P.wallFaceLo);
   rect(g, x, y + 14, TILE, 2, P.base);
+  if (theme === "summer") {
+    // Heart wallpaper.
+    tinyHeart(g, x + 3, y + 5, shade(P.wallFace, -0.08));
+    tinyHeart(g, x + 11, y + 8, shade(P.wallFace, -0.08));
+  }
+}
+
+/** A heart three pixels wide. */
+function tinyHeart(g: Ctx, x: number, y: number, c: string) {
+  rect(g, x, y, 1, 1, c);
+  rect(g, x + 2, y, 1, 1, c);
+  rect(g, x, y + 1, 3, 1, c);
+  rect(g, x + 1, y + 2, 1, 1, c);
+}
+
+/** Whether a point is inside a heart that fills a w-by-h box, point down. */
+function inHeart(i: number, j: number, w: number, h: number) {
+  const x = ((i + 0.5 - w / 2) / (w / 2)) * 1.15;
+  const y = 1.25 - ((j + 0.5) / h) * 2.3;
+  const a = x * x + y * y - 1;
+  return a * a * a - x * x * y * y * y <= 0;
+}
+
+function heartRug(g: Ctx, x: number, y: number, w: number, h: number, color: string) {
+  const edge = shade(color, -0.2);
+  const inner = shade(color, 0.22);
+  for (let j = 0; j < h; j++)
+    for (let i = 0; i < w; i++) {
+      if (!inHeart(i, j, w, h)) continue;
+      const rim = !inHeart(i - 2, j, w, h) || !inHeart(i + 2, j, w, h) || !inHeart(i, j - 2, w, h) || !inHeart(i, j + 2, w, h);
+      const band = !inHeart(i - 5, j, w, h) || !inHeart(i + 5, j, w, h) || !inHeart(i, j - 5, w, h) || !inHeart(i, j + 5, w, h);
+      g.fillStyle = rim ? edge : band ? color : (i + j) % 7 === 0 ? inner : color;
+      g.fillRect(x + i, y + j, 1, 1);
+    }
+  for (let k = 0; k < 2; k++) rect(g, x + Math.round(w / 2) - 6 + k * 9, y + Math.round(h / 3), 2, 1, inner);
+}
+
+function pool(g: Ctx, x: number, y: number, w: number, h: number) {
+  // Pink and white tiles round the edge, then the water.
+  for (let j = 0; j < h; j += 4)
+    for (let i = 0; i < w; i += 4) rect(g, x + i, y + j, 4, 4, ((i + j) / 4) % 2 ? "#ffffff" : "#f7c3d9");
+  const wx = x + 5, wy = y + 5, ww = w - 10, wh = h - 10;
+  rect(g, wx - 1, wy - 1, ww + 2, wh + 2, "#e3a2c0");
+  rect(g, wx, wy, ww, wh, "#8fd6ec");
+  rect(g, wx, wy + Math.floor(wh * 0.6), ww, wh - Math.floor(wh * 0.6), "#79c9e4");
+  rect(g, wx, wy, ww, 2, "#6fbcd8");
+  const r = rng(ww * 31 + wh);
+  for (let k = 0; k < (ww * wh) / 150; k++) {
+    const rx = wx + 2 + Math.floor(r() * (ww - 8));
+    const ry = wy + 4 + Math.floor(r() * (wh - 6));
+    rect(g, rx, ry, 4, 1, "#d4f2fb");
+    rect(g, rx + 5, ry + 2, 2, 1, "#d4f2fb");
+  }
+  // A donut float, and the ladder.
+  const fx = wx + ww - 18, fy = wy + Math.floor(wh / 2) - 4;
+  if (fx > wx + 12) {
+    rect(g, fx + 2, fy, 6, 1, "#f58cbc");
+    rect(g, fx + 1, fy + 1, 8, 1, "#f58cbc");
+    rect(g, fx, fy + 2, 3, 4, "#f58cbc");
+    rect(g, fx + 7, fy + 2, 3, 4, "#f58cbc");
+    rect(g, fx + 1, fy + 6, 8, 1, "#f58cbc");
+    rect(g, fx + 2, fy + 7, 6, 1, "#e46f9f");
+    rect(g, fx + 3, fy + 3, 4, 2, "#79c9e4");
+    rect(g, fx + 2, fy + 1, 1, 1, "#ffffff");
+    rect(g, fx + 7, fy + 6, 1, 1, "#fbe08a");
+  }
+  rect(g, wx + ww - 4, wy - 3, 1, 6, "#d9d9e0");
+  rect(g, wx + ww - 1, wy - 3, 1, 6, "#d9d9e0");
+  rect(g, wx + ww - 4, wy, 4, 1, "#d9d9e0");
+}
+
+function heartMirror(g: Ctx, x: number, y: number) {
+  const ox = x + 10, oy = y + 4;
+  for (let j = 0; j < 10; j++)
+    for (let i = 0; i < 12; i++) {
+      if (!inHeart(i, j, 12, 10)) continue;
+      const rim = !inHeart(i - 1, j, 12, 10) || !inHeart(i + 1, j, 12, 10) || !inHeart(i, j - 1, 12, 10) || !inHeart(i, j + 1, 12, 10);
+      rect(g, ox + i, oy + j, 1, 1, rim ? "#e9c25a" : "#eaf6fb");
+    }
+  rect(g, ox + 3, oy + 2, 2, 1, "#ffffff");
+  rect(g, ox + 3, oy + 3, 1, 1, "#ffffff");
+}
+
+function curtainWindow(g: Ctx, x: number, y: number) {
+  rect(g, x + 5, y + 4, 22, 9, P.windowFrame);
+  rect(g, x + 6, y + 5, 20, 7, "#cfeef7");
+  rect(g, x + 7, y + 6, 4, 1, "#eef9fc");
+  rect(g, x + 15, y + 5, 1, 7, P.windowFrame);
+  // Curtains, tied back, under a ruffle.
+  rect(g, x + 3, y + 3, 26, 2, "#f9c6dc");
+  for (let k = 0; k < 26; k += 3) rect(g, x + 3 + k, y + 5, 2, 1, "#f9c6dc");
+  rect(g, x + 3, y + 5, 4, 9, "#f5b3cf");
+  rect(g, x + 25, y + 5, 4, 9, "#f5b3cf");
+  rect(g, x + 3, y + 9, 4, 1, "#e9c25a");
+  rect(g, x + 25, y + 9, 4, 1, "#e9c25a");
 }
 
 function rug(g: Ctx, x: number, y: number, w: number, h: number, color: string) {
@@ -193,6 +288,11 @@ function rug(g: Ctx, x: number, y: number, w: number, h: number, color: string) 
   g.fillRect(x + 4, y + h - 5, w - 8, 1);
   g.fillRect(x + 4, y + 4, 1, h - 8);
   g.fillRect(x + w - 5, y + 4, 1, h - 8);
+  if (theme === "summer") {
+    for (let py = y + 8; py < y + h - 10; py += 9)
+      for (let px = x + 8 + ((py / 9) % 2) * 5; px < x + w - 10; px += 10) tinyHeart(g, px, py, shade(color, 0.18));
+    return;
+  }
   for (let py = y + 8; py < y + h - 8; py += 6)
     for (let px = x + 8 + ((py / 6) % 2) * 3; px < x + w - 8; px += 6) g.fillRect(px, py, 1, 1);
 }
@@ -238,8 +338,10 @@ export function floorLayer(l: Layout): HTMLCanvasElement {
     rug(g, X(rb.x0 + 1) + 6, (rb.y0 + 2) * TILE + 6, (rb.x1 - rb.x0 - 1) * TILE - 12, (rb.y1 - rb.y0 - 2) * TILE - 12, P.rugs[rb.rug]);
   }
   for (const p of l.props) {
-    if (p.kind === "whiteboard") whiteboard(g, X(p.x), p.y * TILE);
-    if (p.kind === "window") windowOnWall(g, X(p.x), p.y * TILE);
+    if (p.kind === "whiteboard") (theme === "summer" ? heartMirror : whiteboard)(g, X(p.x), p.y * TILE);
+    if (p.kind === "window") (theme === "summer" ? curtainWindow : windowOnWall)(g, X(p.x), p.y * TILE);
+    if (p.kind === "rug-heart") heartRug(g, X(p.x), p.y * TILE, p.w * TILE, p.h * TILE, P.lobbyRug);
+    if (p.kind === "pool") pool(g, X(p.x), p.y * TILE, p.w * TILE, p.h * TILE);
     if (p.kind === "rug-lobby") rug(g, X(p.x), p.y * TILE, p.w * TILE, p.h * TILE, P.lobbyRug);
     if (p.kind === "rug-hall") rug(g, X(p.x) + 4, p.y * TILE + 4, p.w * TILE - 8, p.h * TILE - 8, P.hallRug);
     if (p.kind === "plot") {
@@ -262,7 +364,7 @@ export function floorLayer(l: Layout): HTMLCanvasElement {
       rect(g, X(p.x) + 4, p.y * TILE + 6, 24, 7, "#6d5d53");
     }
     // Soft contact shadow under anything that stands on the floor.
-    if (p.blocks) {
+    if (p.blocks && p.kind !== "pool") {
       g.fillStyle = "rgba(60,40,25,0.16)";
       g.fillRect(X(p.x) + 1, (p.y + p.h) * TILE - 3, p.w * TILE - 2, 3);
     }
@@ -401,6 +503,9 @@ function reception(): Sprite {
   rect(g, 0, 14, 64, 1, d.trim);
   for (let x = 4; x < 64; x += 6) rect(g, x, 16, 1, 12, d.slat);
   rect(g, 0, 29, 64, 1, d.base);
+  if (theme === "summer") {
+    for (let j = 0; j < 8; j++) for (let i = 0; i < 10; i++) if (inHeart(i, j, 10, 8)) rect(g, 27 + i, 17 + j, 1, 1, "#ffffff");
+  }
   rect(g, 10, 6, 6, 4, P.pot);
   leaves(g, 13, 3, 4, 3, 14, 5);
   return { img: c, up: 14 };
@@ -451,6 +556,7 @@ export function deskSprite(): Sprite {
   rect(g, 4, 15, 3, 1, "#cfcac1");
   rect(g, 0, 22, 32, 5, P.deskFront);
   rect(g, 0, 26, 32, 1, P.deskDark);
+  if (theme === "summer") tinyHeart(g, 15, 23, "#ffffff");
   rect(g, 1, 27, 3, 1, P.leg);
   rect(g, 28, 27, 3, 1, P.leg);
   return { img: c, up: 12 };
@@ -460,6 +566,7 @@ export function deskSprite(): Sprite {
 export const SCREEN = { x: 10, y: 1, w: 12, h: 8 };
 
 export function chairSprite(): Sprite {
+  if (theme === "summer") return heartChair();
   const [c, g] = canvas(16, 16);
   rect(g, 2, 8, 12, 3, P.chairDark);
   rect(g, 3, 2, 10, 7, P.chair);
@@ -517,8 +624,9 @@ const PROP_ART: Record<string, () => Sprite> = {
 };
 const propCache = new Map<string, Sprite>();
 export function propSprite(kind: string): Sprite | null {
-  if (!PROP_ART[kind]) return null;
-  if (!propCache.has(kind)) propCache.set(kind, outlined(PROP_ART[kind]()));
+  const art = (theme === "summer" && SUMMER_ART[kind]) || PROP_ART[kind];
+  if (!art) return null;
+  if (!propCache.has(kind)) propCache.set(kind, outlined(art()));
   return propCache.get(kind)!;
 }
 
@@ -539,6 +647,193 @@ function outlined(s: Sprite): Sprite {
   return { img: c, up: s.up + 1 };
 }
 export { outlined };
+
+// ---- dream house furniture --------------------------------------------------------------------
+
+function heartChair(): Sprite {
+  const [c, g] = canvas(16, 16);
+  for (let j = 0; j < 9; j++) for (let i = 0; i < 12; i++) if (inHeart(i, j, 12, 9)) rect(g, 2 + i, 1 + j, 1, 1, P.chair);
+  rect(g, 4, 2, 2, 1, P.chairHi);
+  rect(g, 3, 9, 10, 3, P.chairDark);
+  rect(g, 7, 12, 2, 2, P.chairDark);
+  rect(g, 3, 14, 10, 1, P.chairDark);
+  rect(g, 3, 15, 1, 1, P.chairDark);
+  rect(g, 12, 15, 1, 1, P.chairDark);
+  return { img: c, up: 0 };
+}
+
+/** A wardrobe of dresses, where an office would have a bookcase. */
+function wardrobe(): Sprite {
+  const [c, g] = canvas(16, 38);
+  rect(g, 1, 0, 14, 38, "#ffffff");
+  rect(g, 2, 2, 12, 16, "#f7d3e2");
+  rect(g, 2, 3, 12, 1, "#d9a3bd");
+  const dresses = ["#f58cbc", "#c9a6f0", "#8fd3e0"];
+  dresses.forEach((col, k) => {
+    const x = 2 + k * 4;
+    rect(g, x + 1, 4, 2, 1, "#d9a3bd");
+    rect(g, x + 1, 5, 2, 4, col);
+    rect(g, x, 9, 4, 7, col);
+    rect(g, x, 15, 4, 1, shade(col, -0.18));
+    rect(g, x + 1, 6, 1, 1, shade(col, 0.4));
+  });
+  rect(g, 2, 18, 12, 1, "#f2dbe5");
+  for (const dy of [20, 27]) {
+    rect(g, 2, dy, 12, 6, "#fff5f9");
+    rect(g, 2, dy + 5, 12, 1, "#f2dbe5");
+    rect(g, 7, dy + 2, 2, 1, "#e9c25a");
+  }
+  rect(g, 1, 35, 14, 3, "#f2dbe5");
+  rect(g, 6, 0, 4, 1, "#f5b3cf");
+  return { img: c, up: 22 };
+}
+
+/** Potted roses, where an office would have a plant. */
+function roses(size: "small" | "mid"): Sprite {
+  const s = plant(size);
+  const g = s.img.getContext("2d")!;
+  const r = rng(size === "mid" ? 77 : 33);
+  const n = size === "mid" ? 6 : 3;
+  for (let k = 0; k < n; k++) {
+    const x = 4 + Math.floor(r() * 7);
+    const y = (size === "mid" ? 3 : 4) + Math.floor(r() * (size === "mid" ? 9 : 4));
+    rect(g, x, y, 2, 2, "#f27aae");
+    rect(g, x, y, 1, 1, "#ffc2dc");
+  }
+  return s;
+}
+
+/** A pink flamingo on one leg, where an office would have a tall plant. */
+function flamingo(): Sprite {
+  const [c, g] = canvas(16, 40);
+  const pink = "#f58cbc", deep = "#e46f9f";
+  rect(g, 4, 14, 8, 6, pink);
+  rect(g, 5, 13, 6, 1, pink);
+  rect(g, 5, 20, 6, 1, pink);
+  rect(g, 2, 15, 2, 2, pink);
+  rect(g, 6, 15, 5, 3, deep);
+  rect(g, 10, 9, 2, 5, pink);
+  rect(g, 9, 6, 2, 3, pink);
+  rect(g, 10, 4, 2, 2, pink);
+  rect(g, 9, 2, 4, 3, pink);
+  rect(g, 11, 3, 1, 1, "#2a1f26");
+  rect(g, 13, 3, 2, 2, "#ffffff");
+  rect(g, 14, 4, 1, 1, "#2a1f26");
+  rect(g, 8, 21, 1, 14, deep);
+  rect(g, 9, 24, 3, 1, deep);
+  rect(g, 11, 22, 1, 2, deep);
+  rect(g, 7, 35, 3, 1, deep);
+  rect(g, 4, 36, 8, 3, "#ffffff");
+  rect(g, 4, 38, 8, 1, "#f2dbe5");
+  return { img: c, up: 24 };
+}
+
+/** A palm in a pink planter, where an office would have a tree. */
+function palm(): Sprite {
+  const up = 28;
+  const [c, g] = canvas(32, 16 + up);
+  const top = 16 + up;
+  for (let k = 0; k < 9; k++) {
+    const y = top - 12 - k * 3;
+    const x = 15 + Math.round(Math.sin(k / 3) * 2);
+    rect(g, x, y, 3, 3, k % 2 ? "#d9a86c" : "#c99a60");
+    rect(g, x, y + 2, 3, 1, "#b0814c");
+  }
+  const cx = 17, cy = 7;
+  for (const a of [-2.8, -2.3, -1.7, -1.2, -0.6, -0.1, 0.4]) {
+    for (let t = 1; t < 13; t++) {
+      const x = Math.round(cx + Math.cos(a) * t * 1.15);
+      const y = Math.round(cy + Math.sin(a) * t * 0.75 + 0.05 * t * t);
+      rect(g, x, y, 2, 1, P.leaves[t % 3 === 0 ? 2 : 1]);
+      if (t % 2 === 0) rect(g, x, y + 1, 1, 2, P.leaves[0]);
+    }
+  }
+  rect(g, 15, 7, 2, 2, "#8a5a3a");
+  rect(g, 18, 8, 2, 2, "#7a4a2e");
+  rect(g, 9, top - 10, 14, 9, P.pot);
+  rect(g, 8, top - 11, 16, 2, P.potRim);
+  rect(g, 20, top - 9, 3, 8, P.potDark);
+  tinyHeart(g, 13, top - 7, "#ffffff");
+  return { img: c, up };
+}
+
+/** A pink slide down into the pool. */
+function slide(): Sprite {
+  const [c, g] = canvas(16, 34);
+  rect(g, 1, 3, 1, 31, "#ffffff");
+  rect(g, 5, 3, 1, 31, "#ffffff");
+  for (let y = 6; y < 33; y += 4) rect(g, 2, y, 3, 1, "#f2dbe5");
+  rect(g, 1, 2, 8, 2, "#f58cbc");
+  for (let k = 0; k < 28; k++) {
+    const x = 6 + Math.round(k * 0.32);
+    const y = 4 + k;
+    rect(g, x, y, 5, 1, k % 2 ? "#f58cbc" : "#f27aae");
+    rect(g, x, y, 1, 1, "#fbd2e3");
+  }
+  return { img: c, up: 18 };
+}
+
+function lounger(): Sprite {
+  const [c, g] = canvas(16, 34);
+  rect(g, 3, 2, 10, 28, "#ffffff");
+  rect(g, 4, 3, 8, 26, "#f9c6dc");
+  rect(g, 4, 11, 8, 1, "#ffffff");
+  rect(g, 4, 3, 8, 8, "#f5b3cf");
+  rect(g, 5, 4, 6, 3, "#ffffff");
+  rect(g, 4, 19, 8, 3, "#8fd3e0");
+  rect(g, 4, 20, 8, 1, "#c8ecf3");
+  rect(g, 4, 30, 1, 3, "#d9a3bd");
+  rect(g, 11, 30, 1, 3, "#d9a3bd");
+  return { img: c, up: 2 };
+}
+
+function umbrella(): Sprite {
+  const [c, g] = canvas(16, 36);
+  const rows: [number, number][] = [[5, 10], [3, 12], [2, 13], [1, 14], [1, 14], [1, 14], [1, 14]];
+  rows.forEach(([a, b], j) => {
+    for (let x = a; x <= b; x++) rect(g, x, 2 + j, 1, 1, Math.floor((x - 1) / 3) % 2 ? "#ffffff" : "#f58cbc");
+  });
+  for (let x = 1; x <= 14; x += 3) rect(g, x, 9, 2, 1, "#f58cbc");
+  rect(g, 7, 10, 2, 22, "#ffffff");
+  rect(g, 5, 32, 6, 2, "#d9a3bd");
+  return { img: c, up: 20 };
+}
+
+/** The pink convertible, parked at the end of the hall. */
+function convertible(): Sprite {
+  const [c, g] = canvas(32, 22);
+  const pink = "#f58cbc", deep = "#e46f9f";
+  rect(g, 2, 10, 28, 6, pink);
+  rect(g, 4, 8, 24, 2, pink);
+  rect(g, 2, 15, 28, 1, deep);
+  rect(g, 18, 3, 2, 6, "#bfe8f2");
+  rect(g, 19, 2, 1, 1, "#ffffff");
+  rect(g, 8, 6, 8, 3, "#ffffff");
+  rect(g, 8, 6, 8, 1, "#f2dbe5");
+  rect(g, 0, 13, 3, 2, "#e0e0e8");
+  rect(g, 29, 13, 3, 2, "#e0e0e8");
+  rect(g, 28, 10, 2, 2, "#fff3b0");
+  rect(g, 4, 11, 10, 1, "#fbd2e3");
+  for (const wx of [5, 22]) {
+    rect(g, wx, 15, 6, 6, "#3a2a33");
+    rect(g, wx + 1, 14, 4, 1, "#3a2a33");
+    rect(g, wx + 2, 17, 2, 2, "#e0e0e8");
+  }
+  tinyHeart(g, 15, 11, "#ffffff");
+  return { img: c, up: 6 };
+}
+
+const SUMMER_ART: Record<string, () => Sprite> = {
+  bookcase: wardrobe,
+  plant: () => roses("mid"),
+  "plant-small": () => roses("small"),
+  "plant-big": flamingo,
+  tree: palm,
+  slide,
+  lounger,
+  umbrella,
+  convertible,
+};
 
 // ---- people ---------------------------------------------------------------------------------
 
