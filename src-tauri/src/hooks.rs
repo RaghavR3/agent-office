@@ -3,8 +3,10 @@
 //!
 //! Each event overwrites one small file per Claude process in ~/.agent-office/sessions, named by
 //! the process id, so a session keeps its file across /clear and the folder never grows past
-//! one file per running session. Only sessions inside Orca or cmux are recorded. The hook is
-//! plain sh, always exits 0, and is marked so it can be found and removed again.
+//! one file per running session. Only sessions inside Orca, cmux or the office's own terminals
+//! are recorded. The hook is plain sh, always exits 0, and is marked so it can be found and
+//! removed again. The office's own terminals get it with `--settings`, so for them nothing is
+//! installed.
 
 use crate::status::PaneStatus;
 use anyhow::{anyhow, Result};
@@ -30,9 +32,9 @@ const EVENTS: [&str; 9] = [
 /// the file's own modified time says when the event happened.
 const COMMAND: &str = concat!(
     ": agent-office-hook; ",
-    r#"[ -n "${CMUX_SURFACE_ID:-}${ORCA_TERMINAL_HANDLE:-}" ] || exit 0; "#,
+    r#"[ -n "${CMUX_SURFACE_ID:-}${ORCA_TERMINAL_HANDLE:-}${AGENT_OFFICE_TERMINAL:-}" ] || exit 0; "#,
     r#"umask 077; d="$HOME/.agent-office/sessions"; [ -d "$d" ] || mkdir -p "$d" || exit 0; p=$(cat); "#,
-    r#"printf '{"pid":%s,"surface":"%s","workspace":"%s","orca":"%s","event":%s}\n' "$PPID" "${CMUX_SURFACE_ID:-}" "${CMUX_WORKSPACE_ID:-}" "${ORCA_TERMINAL_HANDLE:-}" "${p:-null}" > "$d/$PPID.$$" && mv -f "$d/$PPID.$$" "$d/$PPID.json"; "#,
+    r#"printf '{"pid":%s,"surface":"%s","workspace":"%s","orca":"%s","pty":"%s","event":%s}\n' "$PPID" "${CMUX_SURFACE_ID:-}" "${CMUX_WORKSPACE_ID:-}" "${ORCA_TERMINAL_HANDLE:-}" "${AGENT_OFFICE_TERMINAL:-}" "${p:-null}" > "$d/$PPID.$$" && mv -f "$d/$PPID.$$" "$d/$PPID.json"; "#,
     "exit 0"
 );
 
@@ -42,6 +44,35 @@ fn settings_path() -> PathBuf {
 
 pub fn sessions_dir() -> PathBuf {
     dirs::home_dir().unwrap_or_default().join(".agent-office/sessions")
+}
+
+/// Where the office's own terminals leave Claude's latest status-line data, for plan usage.
+pub fn usage_path() -> PathBuf {
+    dirs::home_dir().unwrap_or_default().join(".agent-office/usage.json")
+}
+
+/// Saves the status-line data for the office, then shows your own status line as usual.
+const STATUS_LINE: &str = concat!(
+    ": agent-office-status; p=$(cat); ",
+    r#"umask 077; d="$HOME/.agent-office"; [ -d "$d" ] || mkdir -p "$d"; printf '%s' "$p" > "$d/usage.$$" && mv -f "$d/usage.$$" "$d/usage.json"; "#,
+    r#"[ -n "${AGENT_OFFICE_STATUSLINE:-}" ] && printf '%s' "$p" | sh -c "$AGENT_OFFICE_STATUSLINE"; "#,
+    "exit 0"
+);
+
+/// Settings for a session in the office's own terminals, passed with `--settings`: our hook on
+/// every event (Claude adds it to your own hooks) and the status line that reports usage.
+pub fn session_settings() -> String {
+    let mut v = json!({ "statusLine": { "type": "command", "command": STATUS_LINE, "padding": 0 } });
+    if let Some(theirs) = read_settings().ok().and_then(|s| s["statusLine"]["padding"].as_i64()) {
+        v["statusLine"]["padding"] = json!(theirs);
+    }
+    add_hooks(&mut v).ok();
+    v.to_string()
+}
+
+/// Your own status-line command, so it still shows in the office's terminals.
+pub fn your_status_line() -> Option<String> {
+    read_settings().ok()?["statusLine"]["command"].as_str().filter(|c| !c.trim().is_empty() && !c.contains("agent-office-status")).map(str::to_string)
 }
 
 fn read_settings() -> Result<Value> {
@@ -142,6 +173,8 @@ pub struct Session {
     pub workspace: Option<String>,
     /// Orca's terminal handle, when the session runs in Orca.
     pub orca: Option<String>,
+    /// The office's own terminal, when the session runs in one.
+    pub pty: Option<String>,
     pub at_ms: i64,
 }
 
@@ -165,6 +198,7 @@ impl Session {
             surface: s(&v["surface"]),
             workspace: s(&v["workspace"]),
             orca: s(&v["orca"]),
+            pty: s(&v["pty"]).filter(|p| p.starts_with(crate::pty::PREFIX)),
             at_ms,
         })
     }
@@ -258,7 +292,7 @@ mod tests {
 
     fn run_hook(home: &std::path::Path, env: &[(&str, &str)], payload: &str) {
         let mut cmd = std::process::Command::new("sh");
-        cmd.arg("-c").arg(COMMAND).env("HOME", home).env_remove("CMUX_SURFACE_ID").env_remove("ORCA_TERMINAL_HANDLE");
+        cmd.arg("-c").arg(COMMAND).env("HOME", home).env_remove("CMUX_SURFACE_ID").env_remove("ORCA_TERMINAL_HANDLE").env_remove("AGENT_OFFICE_TERMINAL");
         for (k, v) in env {
             cmd.env(k, v);
         }
@@ -274,7 +308,7 @@ mod tests {
         let stop = r#"{"session_id":"abc-123","cwd":"/tmp/x","hook_event_name":"Stop","last_assistant_message":"All done"}"#;
         run_hook(&home, &[], stop);
         let dir = home.join(".agent-office/sessions");
-        assert!(!dir.exists(), "sessions outside Orca and cmux aren't recorded");
+        assert!(!dir.exists(), "sessions outside Orca, cmux and the office aren't recorded");
 
         run_hook(&home, &[("CMUX_SURFACE_ID", "surf-1")], r#"{"session_id":"abc-123","hook_event_name":"UserPromptSubmit","prompt":"Fix it"}"#);
         run_hook(&home, &[("CMUX_SURFACE_ID", "surf-1")], stop);
@@ -300,6 +334,20 @@ mod tests {
         assert!(EVENTS.iter().all(|ev| has_ours(&v["hooks"][ev])));
         remove_hooks(&mut v);
         assert_eq!(v, original);
+    }
+
+    #[test]
+    fn records_sessions_in_the_offices_own_terminals() {
+        let home = std::env::temp_dir().join(format!("ao-hook-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).unwrap();
+        run_hook(&home, &[("AGENT_OFFICE_TERMINAL", "pty:abc")], r#"{"session_id":"s-1","hook_event_name":"SessionStart"}"#);
+        let file = std::fs::read_dir(home.join(".agent-office/sessions")).unwrap().flatten().next().unwrap();
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
+        assert_eq!(Session::parse(&v, 0).unwrap().pty.as_deref(), Some("pty:abc"));
+        let settings: Value = serde_json::from_str(&session_settings()).unwrap();
+        assert!(EVENTS.iter().all(|ev| has_ours(&settings["hooks"][ev])));
+        assert!(settings["statusLine"]["command"].as_str().unwrap().contains("usage.json"));
+        std::fs::remove_dir_all(&home).ok();
     }
 
     #[test]

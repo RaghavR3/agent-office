@@ -6,9 +6,16 @@ const HOSTS: { id: Setup["preference"]; label: string }[] = [
   { id: "auto", label: "Automatic" },
   { id: "orca", label: "Orca" },
   { id: "cmux", label: "cmux" },
+  { id: "builtin", label: "Built-in" },
 ];
 
 function hostLine(s: Setup): string {
+  if (s.host === "builtin") {
+    if (s.preference !== "auto") return "Agents run in the office's own terminals, inside Agent Office.";
+    return s.orca || s.cmux
+      ? "Agents run in the office's own terminals while any are at work there."
+      : "Agents run in the office's own terminals, since neither Orca nor cmux is running.";
+  }
   const name = s.host === "orca" ? "Orca" : "cmux";
   if (!s.orca && !s.cmux) return "Neither Orca nor cmux is running.";
   if (s.preference === "auto") {
@@ -23,6 +30,7 @@ export function SettingsDialog({ setup, onClose }: { setup: Setup; onClose: () =
   const [busy, setBusy] = useState(false);
   const [password, setPassword] = useState("");
   const [saved, setSaved] = useState(false);
+  const [claudePath, setClaudePath] = useState(setup.claudePath);
 
   const run = async (f: () => Promise<unknown>) => {
     setError(null);
@@ -72,6 +80,41 @@ export function SettingsDialog({ setup, onClose }: { setup: Setup; onClose: () =
         <p className="quiet">{hostLine(setup)}</p>
       </section>
 
+      {(setup.host === "builtin" || setup.preference === "builtin") && (
+        <section className="setting">
+          <h3>Claude Code</h3>
+          {setup.claude ? (
+            <p className="quiet">Found. Agents run in it on your own Claude plan.</p>
+          ) : (
+            <p className="warn">Couldn't find Claude Code. Install it from claude.com/claude-code, or give its path here.</p>
+          )}
+          <form
+            className="password-row"
+            onSubmit={(e) => {
+              e.preventDefault();
+              run(() => api.setClaudePath(claudePath));
+            }}
+          >
+            <input
+              value={claudePath}
+              placeholder="Found on your login PATH. Paste a path to use another."
+              onChange={(e) => setClaudePath(e.target.value)}
+              aria-label="Where Claude Code is"
+              spellCheck={false}
+            />
+            <button className="btn ghost" type="submit" disabled={busy || claudePath === setup.claudePath}>
+              Save
+            </button>
+          </form>
+          <div className="handoff-row">
+            <span className="quiet">Signed out, or switching plans? Claude Code's own sign-in opens in a terminal.</span>
+            <button className="btn ghost" onClick={() => run(api.claudeSignIn)} disabled={busy || !setup.claude}>
+              Sign in
+            </button>
+          </div>
+        </section>
+      )}
+
       <section className="setting">
         <h3>Status hook</h3>
         <p>
@@ -80,6 +123,7 @@ export function SettingsDialog({ setup, onClose }: { setup: Setup; onClose: () =
           <code>~/.agent-office</code> on this Mac. Your other hooks stay as they are, and the file is backed up first.
         </p>
         {setup.host === "cmux" && !setup.hooks && <p className="warn">cmux needs this to show your agents.</p>}
+        {setup.host === "builtin" && <p className="quiet">The office's own terminals don't need it: they get the hook for their sessions only.</p>}
         <div className="handoff-row">
           <span className="quiet">
             {setup.hooks
