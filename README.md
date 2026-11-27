@@ -5,6 +5,11 @@ or [cmux](https://cmux.com). Each repo or folder is a room, and each Claude sess
 they work, stand up and wave when they need you, and leave a short brief when they finish: a
 headline, a few points, questions you can answer with a click, and links. No walls of text.
 
+https://github.com/user-attachments/assets/e3a1bc4d-6f90-4349-b68d-ee87a1204176
+
+One task from hand-off to finished work: help the agent when it gets stuck, read its brief, then
+check what it did. The agents and data are made up.
+
 Raggy, the chief of staff at reception, takes anything you hand over and sends it to the right room,
 asking you only when it could go to more than one. Click Raggy's name to rename them.
 
