@@ -150,7 +150,7 @@ const snap: Snapshot = {
   hiddenRooms: [{ id: "room-x", name: "e2e", original: "e2e", path: "/tmp/e2e", kind: "repo", color: null, areas: [] }],
   agents: params.get("empty") !== null ? [] : agents,
   requests: params.get("empty") !== null ? [] : requests,
-  cosName: "Raggy",
+  cosName: params.get("cos") ?? "Raggy",
   askCosName: params.get("first") !== null,
   notifications: true,
   briefing: {
@@ -237,6 +237,11 @@ mockIPC(
     return null;
   }
   if (cmd === "terminal_attach") return [1, toB64(screen)];
+  if (cmd === "rename_cos") {
+    snap.cosName = (args as { name: string }).name;
+    emit("snapshot", { ...snap });
+    return snap.cosName;
+  }
   if (cmd === "links")
     return {
       top: [

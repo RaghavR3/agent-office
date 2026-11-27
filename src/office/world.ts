@@ -4,7 +4,7 @@
 import { type Agent, type Room, areaColor } from "../api";
 import { Layout, PITCH, RoomBox, layoutOffice } from "./layout";
 import { NavGrid } from "./nav";
-import { Dir, Frames, SCREEN, TILE, YOU, chairSprite, deskSprite, floorLayer, lookForAgent, outlined, personFrames, propSprite } from "./art";
+import { Dir, Frames, SCREEN, TILE, YOU, chairSprite, currentTheme, deskSprite, figureFrames, floorLayer, lookForAgent, outlined, propSprite, scene } from "./art";
 
 export type Focus =
   | { kind: "agent"; id: string; name: string }
@@ -88,14 +88,16 @@ interface Resident {
 
 // Zoom levels in device pixels per art pixel, so pixel art always lands on whole pixels.
 const LEVELS = [2, 3, 4, 5, 6, 8];
-const DESK = outlined(deskSprite());
-const CHAIR = outlined(chairSprite());
+let DESK = outlined(deskSprite());
+let CHAIR = outlined(chairSprite());
+// The theme the desks and chairs above were painted in.
+let furnished = currentTheme();
 const FONT = "'Archivo Variable', -apple-system, sans-serif";
 
 const helperFrames = new Map<string, Frames>();
 function helperLook(agent: string, i: number): Frames {
   const k = `${agent}:${i}`;
-  if (!helperFrames.has(k)) helperFrames.set(k, personFrames(lookForAgent({ name: `${agent} helper ${i}`, role: "worker" })));
+  if (!helperFrames.has(k)) helperFrames.set(k, figureFrames(lookForAgent({ name: `${agent} helper ${i}`, role: "worker" })));
   return helperFrames.get(k)!;
 }
 
@@ -117,7 +119,8 @@ export class World {
   private nav: NavGrid | null = null;
   private residents = new Map<string, Resident>();
   private slotOf = new Map<string, { roomId: string; slot: number }>();
-  private player = new Walker(personFrames(YOU()), 7);
+  private player = new Walker(figureFrames(YOU()), 7);
+  private theme = currentTheme();
   private keys = new Set<string>();
   private zoom = 3;
   private cosState: "idle" | "busy" | "asking" | "brief" = "idle";
@@ -241,6 +244,7 @@ export class World {
 
   setData(rooms: Room[], agents: Agent[], cosName: string, selected: string | null, cosState: World["cosState"] = "idle") {
     this.cosState = cosState;
+    if (currentTheme() !== this.theme) this.retheme();
     // Sorted by area so people in the same area sit together.
     const workers = agents
       .filter((a) => a.role === "worker" && rooms.some((r) => r.id === a.roomId))
@@ -329,6 +333,16 @@ export class World {
     this.dirty = true;
   }
 
+  /** Repaints the floor, the furniture and everyone in it after the theme changes. */
+  private retheme() {
+    this.theme = currentTheme();
+    helperFrames.clear();
+    this.player.frames = figureFrames(YOU());
+    for (const r of this.residents.values()) r.w.frames = figureFrames(lookForAgent(r.agent));
+    if (this.layout) this.rebuild(this.layout);
+    this.dirty = true;
+  }
+
   private box(id: string): RoomBox | undefined {
     return this.layout?.rooms.find((r) => r.room.id === id);
   }
@@ -336,6 +350,11 @@ export class World {
   private rebuild(l: Layout) {
     this.layout = l;
     this.floor = floorLayer(l);
+    if (furnished !== currentTheme()) {
+      DESK = outlined(deskSprite());
+      CHAIR = outlined(chairSprite());
+      furnished = currentTheme();
+    }
     const nav = new NavGrid(l.ox, 0, l.ox + l.w, l.h);
     this.nav = nav;
     // Walls and anything you can't walk through.
@@ -379,7 +398,7 @@ export class World {
   private upsert(a: Agent, slot: number) {
     let r = this.residents.get(a.id);
     if (!r) {
-      const w = new Walker(personFrames(lookForAgent(a)));
+      const w = new Walker(figureFrames(lookForAgent(a)));
       r = { agent: a, w, roomId: a.roomId, slot, leaving: false };
       this.residents.set(a.id, r);
       // Everyone simply appears at their desk: new hires included, no walking in.
@@ -633,7 +652,7 @@ export class World {
     const l = this.layout;
     const g = this.g;
     g.setTransform(1, 0, 0, 1, 0, 0);
-    g.fillStyle = "#2b2d38";
+    g.fillStyle = scene().void;
     g.fillRect(0, 0, this.cv.width, this.cv.height);
     if (!l || !this.floor) return;
 
@@ -747,7 +766,7 @@ export class World {
       const isFocus = this.focus && ((this.focus.kind === "agent" && this.focus.id === a.id) || (this.focus.kind === "cos" && a.role === "cos"));
       const cos = a.role === "cos";
       const flag = needs || (cos && this.cosState === "asking");
-      this.nameTag(g, x, feet + 3, a.name, flag ? "#bf3a2c" : cos ? "#2f7350" : "rgba(28,26,36,0.72)", a.area);
+      this.nameTag(g, x, feet + 3, a.name, flag ? "#bf3a2c" : cos ? scene().cosTag : "rgba(28,26,36,0.72)", a.area);
       // What they're on, so you can tell your agents apart at a glance.
       const helping = a.helpers?.length ?? 0;
       const caption = cos

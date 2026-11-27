@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Snapshot, api, hostName, isBusy } from "./api";
 import { Office } from "./office/Office";
+import { setTheme, themeFor } from "./office/art";
 import type { World } from "./office/world";
 import { Hud, finishedList, needsList } from "./ui/Hud";
 import { AddRoomDialog } from "./ui/AddRoomDialog";
@@ -106,6 +107,9 @@ export default function App() {
 
   if (!snap) return <div className="boot" data-tauri-drag-region />;
 
+  // Before anything draws: the office and every portrait follow the chief of staff's name.
+  const theme = themeFor(snap.cosName);
+  setTheme(theme);
   const agent = open?.kind === "agent" ? snap.agents.find((a) => a.id === open.id) : undefined;
   const host = hostName(snap.setup);
   const openSettings = () => setOpen({ kind: "settings" });
@@ -119,7 +123,7 @@ export default function App() {
         : "idle";
 
   return (
-    <div className="app">
+    <div className={`app theme-${theme}`}>
       <Office
         snap={snap}
         selected={agent?.id ?? (open?.kind === "cos" ? (cosAgent?.id ?? null) : null)}

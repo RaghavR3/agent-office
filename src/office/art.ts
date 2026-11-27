@@ -71,7 +71,80 @@ const P = {
   sofa: "#5f8f96",
   sofaHi: "#79a9b0",
   sofaDark: "#4a7378",
+  lobbyRug: "#b9a07a",
+  stone: ["#a7a39c", "#bdb9b2", "#8f8b84"],
+  lampShade: ["#f0d9a7", "#f8e9c8", "#d8bf8a"],
+  windowFrame: "#5d5670",
+  reception: { top: "#f2eee7", topHi: "#fbf9f5", front: "#8f5f3e", trim: "#c9a46a", slat: "#7d5135", base: "#6b4429" },
+  lift: { frame: "#6f7480", frameHi: "#8a909b", door: "#aab1bb", doorHi: "#bdc4cd", seam: "#7d838e", sill: "#565a64" },
 };
+
+export type Theme = "office" | "summer";
+
+/** Name your chief of staff Summer and the office becomes a pink dream house of golden retrievers. */
+export const themeFor = (cosName: string): Theme => (cosName.trim().toLowerCase() === "summer" ? "summer" : "office");
+
+const OFFICE: typeof P = structuredClone(P);
+
+const SUMMER: typeof P = {
+  outline: "#4a1035",
+  void: "#3d0f2e",
+  wood: ["#f6b3cf", "#f2a8c7", "#f9bdd6", "#f4aecb"],
+  woodSeam: "#de86ad",
+  carpet: "#ffe0ee",
+  carpetAlt: "#fff7fb",
+  hallRug: "#ff7eb6",
+  wallCap: "#c2185b",
+  wallCapHi: "#e0478a",
+  wallFace: "#ffe4f1",
+  wallFaceLo: "#ffd1e7",
+  base: "#f06292",
+  rugs: ["#ff69b4", "#c77dff", "#4dd0e1", "#ff8fab", "#f48fb1", "#ba68c8", "#ffb3d9", "#ef5d9a"],
+  deskTop: "#fff6fb",
+  deskHi: "#ffffff",
+  deskFront: "#ff6fae",
+  deskDark: "#e0438f",
+  leg: "#b0185a",
+  bezel: "#8e1450",
+  steel: "#c2477f",
+  keys: "#ffffff",
+  chair: "#ff4fa3",
+  chairHi: "#ff8cc6",
+  chairDark: "#c2185b",
+  pot: "#ff8fc8",
+  potRim: "#ffb8dd",
+  potDark: "#e0679f",
+  leaves: ["#4e9a5a", "#63b066", "#3f7c45", "#ff5fa8"],
+  shelf: "#f8bbd9",
+  shelfLight: "#fde4f0",
+  shelfBack: "#e48ab5",
+  books: ["#ff4fa3", "#c77dff", "#ffd23f", "#4dd0e1", "#ff8fab", "#ffffff", "#ba68c8", "#ef5d9a"],
+  sofa: "#ff69b4",
+  sofaHi: "#ff9acb",
+  sofaDark: "#d63384",
+  lobbyRug: "#ff4fa3",
+  stone: ["#fff3f9", "#ffffff", "#f6c6dd"],
+  lampShade: ["#ff8cc6", "#ffc2e0", "#e0679f"],
+  windowFrame: "#d81b60",
+  reception: { top: "#ffffff", topHi: "#fff6fb", front: "#ff4fa3", trim: "#ffd23f", slat: "#e0438f", base: "#b0185a" },
+  lift: { frame: "#ff69b4", frameHi: "#ff9acb", door: "#ffd23f", doorHi: "#ffe57a", seam: "#e0a800", sill: "#c2185b" },
+};
+
+let theme: Theme = "office";
+export const currentTheme = () => theme;
+
+/** Repaints everything in the theme's colours from here on. Says whether anything changed. */
+export function setTheme(t: Theme): boolean {
+  if (t === theme) return false;
+  theme = t;
+  Object.assign(P, structuredClone(t === "summer" ? SUMMER : OFFICE));
+  propCache.clear();
+  portraits.clear();
+  return true;
+}
+
+/** Colours the office view draws itself, outside the sprites. */
+export const scene = () => ({ void: P.void, cosTag: theme === "summer" ? "#d6338a" : "#2f7350" });
 
 // ---- floor layer ----------------------------------------------------------------------------
 
@@ -134,7 +207,7 @@ function whiteboard(g: Ctx, x: number, y: number) {
 }
 
 function windowOnWall(g: Ctx, x: number, y: number) {
-  rect(g, x + 3, y + 4, 26, 9, "#5d5670");
+  rect(g, x + 3, y + 4, 26, 9, P.windowFrame);
   rect(g, x + 4, y + 5, 11, 7, "#bfe1ee");
   rect(g, x + 17, y + 5, 11, 7, "#bfe1ee");
   rect(g, x + 5, y + 6, 3, 1, "#e9f6fb");
@@ -165,7 +238,7 @@ export function floorLayer(l: Layout): HTMLCanvasElement {
   for (const p of l.props) {
     if (p.kind === "whiteboard") whiteboard(g, X(p.x), p.y * TILE);
     if (p.kind === "window") windowOnWall(g, X(p.x), p.y * TILE);
-    if (p.kind === "rug-lobby") rug(g, X(p.x), p.y * TILE, p.w * TILE, p.h * TILE, "#b9a07a");
+    if (p.kind === "rug-lobby") rug(g, X(p.x), p.y * TILE, p.w * TILE, p.h * TILE, P.lobbyRug);
     if (p.kind === "rug-hall") rug(g, X(p.x) + 4, p.y * TILE + 4, p.w * TILE - 8, p.h * TILE - 8, P.hallRug);
     if (p.kind === "plot") {
       // A dashed outline where a room's desks would go: an invitation, not a building site.
@@ -231,9 +304,9 @@ function tree(): Sprite {
   leaves(g, 16, 14, 13, 12, 150, 97);
   leaves(g, 11, 20, 7, 5, 40, 131);
   leaves(g, 21, 19, 7, 5, 40, 173);
-  rect(g, 9, top - 10, 14, 9, "#a7a39c");
-  rect(g, 8, top - 11, 16, 2, "#bdb9b2");
-  rect(g, 20, top - 9, 3, 8, "#8f8b84");
+  rect(g, 9, top - 10, 14, 9, P.stone[0]);
+  rect(g, 8, top - 11, 16, 2, P.stone[1]);
+  rect(g, 20, top - 9, 3, 8, P.stone[2]);
   return { img: c, up };
 }
 
@@ -244,10 +317,10 @@ function plant(size: "small" | "mid" | "big"): Sprite {
   const potH = size === "big" ? 9 : 7;
   const potTop = top - potH - 1;
   leaves(g, 8, size === "big" ? 13 : potTop - (size === "mid" ? 7 : 4), size === "big" ? 7 : 6, size === "big" ? 12 : size === "mid" ? 8 : 5, size === "big" ? 70 : 40, size.length * 31);
-  const pot = size === "big" ? "#a7a39c" : P.pot;
+  const pot = size === "big" ? P.stone[0] : P.pot;
   rect(g, 4, potTop + 1, 8, potH, pot);
-  rect(g, 3, potTop, 10, 2, size === "big" ? "#bdb9b2" : P.potRim);
-  rect(g, 10, potTop + 2, 2, potH - 1, size === "big" ? "#8f8b84" : P.potDark);
+  rect(g, 3, potTop, 10, 2, size === "big" ? P.stone[1] : P.potRim);
+  rect(g, 10, potTop + 2, 2, potH - 1, size === "big" ? P.stone[2] : P.potDark);
   return { img: c, up };
 }
 
@@ -295,9 +368,9 @@ function cooler(): Sprite {
 
 function lamp(): Sprite {
   const [c, g] = canvas(16, 36);
-  rect(g, 3, 0, 10, 7, "#f0d9a7");
-  rect(g, 4, 0, 8, 1, "#f8e9c8");
-  rect(g, 3, 6, 10, 1, "#d8bf8a");
+  rect(g, 3, 0, 10, 7, P.lampShade[0]);
+  rect(g, 4, 0, 8, 1, P.lampShade[1]);
+  rect(g, 3, 6, 10, 1, P.lampShade[2]);
   rect(g, 7, 7, 2, 25, P.steel);
   rect(g, 4, 32, 8, 3, P.steel);
   return { img: c, up: 20 };
@@ -319,12 +392,13 @@ function reception(): Sprite {
   const [c, g] = canvas(64, 30);
   rect(g, 40, 0, 14, 10, P.steel);
   rect(g, 46, 10, 2, 2, P.steel);
-  rect(g, 0, 10, 64, 4, "#f2eee7");
-  rect(g, 0, 10, 64, 1, "#fbf9f5");
-  rect(g, 0, 14, 64, 15, "#8f5f3e");
-  rect(g, 0, 14, 64, 1, "#c9a46a");
-  for (let x = 4; x < 64; x += 6) rect(g, x, 16, 1, 12, "#7d5135");
-  rect(g, 0, 29, 64, 1, "#6b4429");
+  const d = P.reception;
+  rect(g, 0, 10, 64, 4, d.top);
+  rect(g, 0, 10, 64, 1, d.topHi);
+  rect(g, 0, 14, 64, 15, d.front);
+  rect(g, 0, 14, 64, 1, d.trim);
+  for (let x = 4; x < 64; x += 6) rect(g, x, 16, 1, 12, d.slat);
+  rect(g, 0, 29, 64, 1, d.base);
   rect(g, 10, 6, 6, 4, P.pot);
   leaves(g, 13, 3, 4, 3, 14, 5);
   return { img: c, up: 14 };
@@ -398,16 +472,17 @@ export function chairSprite(): Sprite {
 
 function lift(): Sprite {
   const [c, g] = canvas(32, 42);
-  rect(g, 0, 0, 32, 42, "#6f7480");
-  rect(g, 0, 0, 32, 2, "#8a909b");
-  rect(g, 3, 3, 26, 5, "#2a2433");
+  const L = P.lift;
+  rect(g, 0, 0, 32, 42, L.frame);
+  rect(g, 0, 0, 32, 2, L.frameHi);
+  rect(g, 3, 3, 26, 5, P.outline);
   rect(g, 14, 4, 4, 3, "#f0c15a");
   rect(g, 15, 4, 2, 1, "#fff0c2");
-  rect(g, 3, 10, 26, 30, "#aab1bb");
-  rect(g, 15, 10, 2, 30, "#7d838e");
-  rect(g, 5, 12, 8, 26, "#bdc4cd");
-  rect(g, 19, 12, 8, 26, "#bdc4cd");
-  rect(g, 0, 40, 32, 2, "#565a64");
+  rect(g, 3, 10, 26, 30, L.door);
+  rect(g, 15, 10, 2, 30, L.seam);
+  rect(g, 5, 12, 8, 26, L.doorHi);
+  rect(g, 19, 12, 8, 26, L.doorHi);
+  rect(g, 0, 40, 32, 2, L.sill);
   return { img: c, up: 26 };
 }
 
@@ -498,7 +573,7 @@ const portraits = new Map<string, string>();
 export function portraitURL(a: { name: string; role: string }): string {
   const k = `${a.role}:${a.name}`;
   if (!portraits.has(k)) {
-    const f = frame((g) => front(g, lookForAgent(a), 0, -1));
+    const f = frame((g) => (theme === "summer" ? dogFront : front)(g, lookForAgent(a), 0, -1));
     const [c, g] = canvas(16, 16);
     g.drawImage(f, -2, 0);
     portraits.set(k, c.toDataURL());
@@ -723,4 +798,194 @@ export function personFrames(L: Look): Frames {
   f["wave-0"] = frame((g) => front(g, L, 0, 0));
   f["wave-1"] = frame((g) => front(g, L, 0, 1));
   return f;
+}
+
+// ---- golden retrievers ------------------------------------------------------------------------
+
+const FUR = ["#f5d49c", "#ecb86c", "#e0a25a", "#cf8a45", "#f2c682"];
+const COLLAR = ["#ff4fa3", "#4dd0e1", "#c77dff", "#ffd23f", "#ff8fab", "#ffffff", "#ef5d9a", "#7ed9a0", "#ff9a5c"];
+const NOSE = "#2a1f26";
+const TONGUE = "#ff7aa8";
+const BOW = "#ff3d9a";
+const TAG = "#ffd23f";
+
+interface Dog {
+  fur: string;
+  furHi: string;
+  furLo: string;
+  ear: string;
+  collar: string;
+  bow: boolean;
+}
+
+/** A dog's coat and collar come from the same name as the person it stands in for. */
+function dogLook(L: Look): Dog {
+  const fur = FUR[Math.max(0, SKIN.indexOf(L.skin)) % FUR.length];
+  return {
+    fur,
+    furHi: shade(fur, 0.32),
+    furLo: shade(fur, -0.16),
+    ear: shade(fur, -0.24),
+    collar: COLLAR[Math.max(0, SHIRT.indexOf(L.shirt)) % COLLAR.length],
+    bow: L.style === 2,
+  };
+}
+
+function dogFront(g: Ctx, L: Look, step: number, wave: number, dy = 0) {
+  const r = (x: number, y: number, w: number, h: number, c: string) => rect(g, x + 1, y + 1 + dy, w, h, c);
+  const D = dogLook(L);
+  const lf = wave < 0 && step === 1 ? -1 : 0;
+  const rf = wave < 0 && step === -1 ? -1 : 0;
+  // Tail, wagging behind.
+  const tw = step === 1 ? -1 : step === -1 ? 1 : 0;
+  r(12, 14 + tw, 2, 2, D.furLo);
+  r(13, 13 + tw, 2, 1, D.fur);
+  // Hind legs and paws.
+  r(5, 18, 2, 5 + lf, D.fur);
+  r(9, 18, 2, 5 + rf, D.fur);
+  r(5, 23 + lf, 2, 1, D.furHi);
+  r(9, 23 + rf, 2, 1, D.furHi);
+  // Body with a pale chest.
+  r(4, 11, 8, 7, D.fur);
+  r(6, 12, 4, 5, D.furHi);
+  r(10, 12, 2, 5, D.furLo);
+  r(5, 9, 6, 2, D.fur);
+  r(4, 10, 8, 1, D.collar);
+  r(7, 11, 2, 1, TAG);
+  // Front paws. A wave lifts the right one.
+  const la = step === 1 ? -1 : 0;
+  r(3, 12, 1, 4 + la, D.furLo);
+  r(3, 16 + la, 1, 1, D.furHi);
+  if (wave === 0) {
+    r(12, 6, 1, 5, D.furLo);
+    r(12, 5, 1, 1, D.furHi);
+  } else if (wave === 1) {
+    r(12, 9, 1, 2, D.furLo);
+    r(13, 6, 1, 3, D.furLo);
+    r(13, 5, 1, 1, D.furHi);
+  } else {
+    const ra = step === -1 ? -1 : 0;
+    r(12, 12, 1, 4 + ra, D.furLo);
+    r(12, 16 + ra, 1, 1, D.furHi);
+  }
+  // Head, floppy ears, a happy muzzle.
+  r(4, 2, 8, 7, D.fur);
+  r(5, 1, 6, 1, D.fur);
+  r(6, 1, 4, 1, D.furHi);
+  r(2, 3, 2, 6, D.ear);
+  r(12, 3, 2, 6, D.ear);
+  r(2, 9, 1, 1, D.ear);
+  r(13, 9, 1, 1, D.ear);
+  r(6, 4, 1, 1, EYE);
+  r(9, 4, 1, 1, EYE);
+  r(6, 6, 4, 3, D.furHi);
+  r(7, 6, 2, 1, NOSE);
+  if (wave >= 0 || step === 0) r(8, 9, 1, 1, TONGUE);
+  if (D.bow) {
+    r(5, 0, 2, 2, BOW);
+    r(9, 0, 2, 2, BOW);
+    r(7, 0, 2, 1, shade(BOW, -0.25));
+  }
+}
+
+function dogBack(g: Ctx, L: Look, step: number, sit: number, dy = 0) {
+  const r = (x: number, y: number, w: number, h: number, c: string) => rect(g, x + 1, y + 1 + dy, w, h, c);
+  const D = dogLook(L);
+  if (sit < 0) {
+    const lf = step === 1 ? -1 : 0;
+    const rf = step === -1 ? -1 : 0;
+    r(5, 18, 2, 5 + lf, D.fur);
+    r(9, 18, 2, 5 + rf, D.fur);
+    r(5, 23 + lf, 2, 1, D.furHi);
+    r(9, 23 + rf, 2, 1, D.furHi);
+    r(7 + step, 17, 2, 4, D.furHi);
+  } else {
+    // Typing at the desk, tail wagging from side to side.
+    r(sit === 1 ? 9 : 4, 17, 3, 2, D.furHi);
+    r(sit === 1 ? 11 : 3, 16, 2, 1, D.fur);
+  }
+  r(4, 10, 8, 8, D.fur);
+  r(4, 11, 2, 6, D.furLo);
+  r(4, 9, 8, 1, D.collar);
+  if (sit >= 0) {
+    r(3, 11 + (sit === 1 ? 0 : 1), 1, 3, D.furLo);
+    r(12, 11 + (sit === 1 ? 1 : 0), 1, 3, D.furLo);
+  } else {
+    r(3, 11, 1, 5 + (step === -1 ? -1 : 0), D.furLo);
+    r(3, 16 + (step === -1 ? -1 : 0), 1, 1, D.furHi);
+    r(12, 11, 1, 5 + (step === 1 ? -1 : 0), D.furLo);
+    r(12, 16 + (step === 1 ? -1 : 0), 1, 1, D.furHi);
+  }
+  r(4, 2, 8, 7, D.fur);
+  r(5, 1, 6, 1, D.fur);
+  r(6, 2, 4, 1, D.furHi);
+  r(2, 3, 2, 6, D.ear);
+  r(12, 3, 2, 6, D.ear);
+  if (D.bow) {
+    r(5, 0, 2, 2, BOW);
+    r(9, 0, 2, 2, BOW);
+    r(7, 0, 2, 1, shade(BOW, -0.25));
+  }
+}
+
+function dogSide(g: Ctx, L: Look, step: number) {
+  const r = (x: number, y: number, w: number, h: number, c: string) => rect(g, x + 1, y + 1, w, h, c);
+  const D = dogLook(L);
+  // Tail out behind, wagging as it walks.
+  const tw = step === 1 ? -1 : step === -1 ? 1 : 0;
+  r(2, 12 + tw, 3, 2, D.fur);
+  r(1, 11 + tw, 2, 1, D.furHi);
+  if (step === 0) {
+    r(6, 18, 4, 5, D.fur);
+    r(6, 23, 5, 1, D.furHi);
+  } else {
+    const a = step === 1;
+    r(a ? 4 : 8, 18, 2, 5, D.fur);
+    r(a ? 3 : 8, 23, 3, 1, D.furHi);
+    r(a ? 8 : 4, 18, 2, 5, D.furLo);
+    r(a ? 8 : 3, 23, 3, 1, D.furHi);
+  }
+  r(5, 10, 6, 8, D.fur);
+  r(9, 11, 2, 5, D.furHi);
+  r(5, 9, 6, 1, D.collar);
+  const ax = step === 1 ? 8 : step === -1 ? 6 : 7;
+  r(ax, 11, 2, 5, D.furLo);
+  r(ax, 16, 2, 1, D.furHi);
+  r(5, 2, 7, 6, D.fur);
+  r(6, 1, 5, 1, D.fur);
+  r(7, 1, 3, 1, D.furHi);
+  r(12, 5, 3, 3, D.furHi);
+  r(14, 5, 1, 1, NOSE);
+  if (step === 0) r(13, 8, 1, 1, TONGUE);
+  r(10, 4, 1, 1, EYE);
+  r(5, 3, 3, 6, D.ear);
+  if (D.bow) {
+    r(7, 0, 2, 2, BOW);
+    r(9, 0, 1, 1, shade(BOW, -0.25));
+  }
+}
+
+/** The same poses as a person, as a golden retriever. */
+function dogFrames(L: Look): Frames {
+  const f: Frames = {};
+  for (const [k, step] of [
+    ["0", 0],
+    ["1", 1],
+    ["2", -1],
+  ] as const) {
+    f[`down-${k}`] = frame((g) => dogFront(g, L, step, -1));
+    f[`up-${k}`] = frame((g) => dogBack(g, L, step, -1));
+    f[`right-${k}`] = frame((g) => dogSide(g, L, step));
+    f[`left-${k}`] = frame((g) => dogSide(g, L, step), true);
+  }
+  f["sit-0"] = frame((g) => dogBack(g, L, 0, 0, 2));
+  f["sit-1"] = frame((g) => dogBack(g, L, 0, 1, 2));
+  f["wave-0"] = frame((g) => dogFront(g, L, 0, 0));
+  f["wave-1"] = frame((g) => dogFront(g, L, 0, 1));
+  return f;
+}
+
+/** Everyone in the office, in the current theme: people, or golden retrievers. */
+export function figureFrames(L: Look): Frames {
+  return theme === "summer" ? dogFrames(L) : personFrames(L);
 }
