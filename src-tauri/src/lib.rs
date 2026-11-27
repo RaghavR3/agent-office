@@ -836,6 +836,7 @@ async fn rename_cos(sh: State<'_, Shared>, name: String) -> Res<String> {
     let idle_cos = {
         let mut o = sh.office.lock().await;
         o.p.cos_name = name.clone();
+        o.p.ask_cos_name = false;
         o.write_contracts().map_err(err)?;
         o.save();
         let busy = o.p.requests.iter().any(|r| matches!(r.state.as_str(), "queued" | "sent" | "routing"));

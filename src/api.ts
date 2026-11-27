@@ -163,6 +163,8 @@ export interface Snapshot {
   agents: Agent[];
   requests: CosRequest[];
   cosName: string;
+  /** First start: the chief of staff hasn't been named yet. */
+  askCosName: boolean;
   notifications: boolean;
   setup: Setup;
   /** Claude plan usage and saved accounts, from Orca. */

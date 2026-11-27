@@ -8,6 +8,7 @@ import { AddRoomDialog } from "./ui/AddRoomDialog";
 import { AgentDialog } from "./ui/AgentDialog";
 import { CosDialog } from "./ui/CosDialog";
 import { HireDialog } from "./ui/HireDialog";
+import { NameCosDialog } from "./ui/NameCosDialog";
 import { SettingsDialog } from "./ui/SettingsDialog";
 import { Toasts } from "./ui/Toasts";
 
@@ -17,6 +18,7 @@ type Open =
   | { kind: "hire"; roomId: string; roomName: string; slot: number | null }
   | { kind: "addroom" }
   | { kind: "settings" }
+  | { kind: "name" }
   | null;
 
 function useNow(ms: number) {
@@ -45,6 +47,11 @@ export default function App() {
       un.then((f) => f());
     };
   }, []);
+
+  const askCosName = snap?.askCosName;
+  useEffect(() => {
+    if (askCosName) setOpen({ kind: "name" });
+  }, [askCosName]);
 
   const goTo = useCallback((id: string) => {
     setTravel((t) => ({ id, n: (t?.n ?? 0) + 1 }));
@@ -175,6 +182,7 @@ export default function App() {
       )}
       {open?.kind === "addroom" && <AddRoomDialog host={host} onClose={close} />}
       {open?.kind === "settings" && <SettingsDialog setup={snap.setup} onClose={close} />}
+      {open?.kind === "name" && <NameCosDialog name={snap.cosName} onClose={close} />}
     </div>
   );
 }

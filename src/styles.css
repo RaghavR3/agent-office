@@ -1792,12 +1792,17 @@ blockquote {
   box-shadow: 0 0 0 1.5px var(--ink);
 }
 
-.password-row {
+.password-row,
+.name-row {
   display: flex;
   gap: 8px;
 }
+.name-row {
+  margin-bottom: 8px;
+}
 
-.password-row input {
+.password-row input,
+.name-row input {
   flex: 1;
   min-width: 0;
   border: 1.5px solid var(--line);
@@ -1809,7 +1814,8 @@ blockquote {
   font-size: 13.5px;
 }
 
-.password-row input:focus-visible {
+.password-row input:focus-visible,
+.name-row input:focus-visible {
   outline: 2px solid var(--blue);
   outline-offset: 1px;
 }
@@ -2713,6 +2719,7 @@ blockquote .link-more {
 
 .ask-own,
 .password-row input,
+.name-row input,
 .session-rename input,
 .attachment,
 .seg {

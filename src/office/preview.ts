@@ -149,6 +149,7 @@ const snap: Snapshot = {
   agents: params.get("empty") !== null ? [] : agents,
   requests: params.get("empty") !== null ? [] : requests,
   cosName: "Raggy",
+  askCosName: params.get("first") !== null,
   notifications: true,
   briefing: {
     summary: "Three things need you; everyone else is moving.",

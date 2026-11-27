@@ -40,6 +40,8 @@ pub struct Persisted {
     pub requests: Vec<CosRequest>,
     pub next_ref: u32,
     pub cos_name: String,
+    /// Set on first start, until you've named the chief of staff.
+    pub ask_cos_name: bool,
     /// Office-only room names, keyed by room id. Orca keeps its own names.
     pub room_names: HashMap<String, String>,
     /// Rooms left out of the office. They stay in Orca.
@@ -258,6 +260,7 @@ pub struct Snapshot {
     pub agents: Vec<AgentView>,
     pub requests: Vec<CosRequest>,
     pub cos_name: String,
+    pub ask_cos_name: bool,
     pub notifications: bool,
     pub setup: Setup,
     pub usage: Option<crate::usage::Usage>,
@@ -367,10 +370,11 @@ pub struct Office {
 
 impl Office {
     pub fn load(data_dir: PathBuf) -> Self {
-        let p = std::fs::read_to_string(data_dir.join("office.json"))
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
+        let p = match std::fs::read_to_string(data_dir.join("office.json")) {
+            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Persisted { ask_cos_name: true, ..Default::default() },
+            Err(_) => Persisted::default(),
+        };
         Office { p, live: Live::default(), data_dir }
     }
 
@@ -1154,6 +1158,7 @@ impl Office {
             agents: self.agents(),
             requests,
             cos_name: self.cos_name(),
+            ask_cos_name: self.p.ask_cos_name,
             notifications: !self.p.notifications_off,
             usage: self.live.usage.clone(),
             mcp: self.live.mcp_servers.clone(),
@@ -1554,6 +1559,18 @@ pub fn sh_quote(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn asks_for_a_name_on_first_start() {
+        let dir = std::env::temp_dir().join(format!("ao-office-{}", uuid::Uuid::new_v4()));
+        let o = Office::load(dir.clone());
+        assert!(o.p.ask_cos_name);
+        o.save();
+        assert!(Office::load(dir.clone()).p.ask_cos_name, "asked again until a name is picked");
+        std::fs::write(dir.join("office.json"), r#"{"cosName":""}"#).unwrap();
+        assert!(!Office::load(dir.clone()).p.ask_cos_name, "an office saved before this question isn't asked");
+        std::fs::remove_dir_all(dir).ok();
+    }
 
     #[test]
     fn agents_keep_who_they_are_when_their_terminal_changes() {
