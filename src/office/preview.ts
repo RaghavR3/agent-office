@@ -153,6 +153,7 @@ const snap: Snapshot = {
   cosName: params.get("cos") ?? "Raggy",
   askCosName: params.get("first") !== null,
   notifications: true,
+  dreamHouse: true,
   briefing: {
     summary: "Three things need you; everyone else is moving.",
     at: Date.now() - 120_000,
@@ -237,6 +238,11 @@ mockIPC(
     return null;
   }
   if (cmd === "terminal_attach") return [1, toB64(screen)];
+  if (cmd === "set_dream_house") {
+    snap.dreamHouse = (args as { on: boolean }).on;
+    emit("snapshot", { ...snap });
+    return null;
+  }
   if (cmd === "rename_cos") {
     snap.cosName = (args as { name: string }).name;
     emit("snapshot", { ...snap });

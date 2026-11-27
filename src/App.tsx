@@ -108,7 +108,7 @@ export default function App() {
   if (!snap) return <div className="boot" data-tauri-drag-region />;
 
   // Before anything draws: the office and every portrait follow the chief of staff's name.
-  const theme = themeFor(snap.cosName);
+  const theme = themeFor(snap.cosName, snap.dreamHouse);
   setTheme(theme);
   const agent = open?.kind === "agent" ? snap.agents.find((a) => a.id === open.id) : undefined;
   const host = hostName(snap.setup);
@@ -211,7 +211,7 @@ export default function App() {
         />
       )}
       {open?.kind === "addroom" && <AddRoomDialog host={host} onClose={close} />}
-      {open?.kind === "settings" && <SettingsDialog setup={snap.setup} onClose={close} />}
+      {open?.kind === "settings" && <SettingsDialog setup={snap.setup} cosName={snap.cosName} dreamHouse={snap.dreamHouse} onClose={close} />}
       {open?.kind === "name" && <NameCosDialog name={snap.cosName} onClose={close} />}
       {quitting && <QuitDialog names={quitting} onClose={() => setQuitting(null)} />}
       {terminal && (

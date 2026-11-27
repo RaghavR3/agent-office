@@ -1130,6 +1130,16 @@ async fn set_notifications(sh: State<'_, Shared>, on: bool) -> Res<()> {
     Ok(())
 }
 
+#[tauri::command]
+async fn set_dream_house(sh: State<'_, Shared>, on: bool) -> Res<()> {
+    let mut o = sh.office.lock().await;
+    o.p.dream_house_off = !on;
+    o.save();
+    drop(o);
+    sh.nudge();
+    Ok(())
+}
+
 const MAX_ATTACHMENT: u64 = 50 * 1024 * 1024;
 
 /// Keeps the file's own name, so agents can tell notes.md from a screenshot, in a folder of its own.
@@ -1963,6 +1973,7 @@ pub fn run() {
             rename_room,
             reset_agent,
             set_notifications,
+            set_dream_house,
             save_attachment,
             import_attachment,
             set_room_hidden,

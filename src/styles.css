@@ -3318,24 +3318,24 @@ blockquote .link-more {
 /* ---- summer: the dream house ---------------------------------------------------------------- */
 
 .app.theme-summer {
-  --ink: #4a1035;
-  --ink-2: #7a3a63;
-  --ink-3: #a8749a;
-  --paper: #fff3f9;
-  --paper-2: #ffe2f0;
-  --line: rgba(74, 16, 53, 0.14);
-  --blue: #d6338a;
-  --glass: rgba(110, 18, 72, 0.82);
-  --glass-hi: rgba(255, 200, 230, 0.14);
-  --void: #3d0f2e;
-  --pop: 0 4px 0 var(--ink), 0 18px 40px rgba(80, 10, 50, 0.35);
-  --edge: #f3c1da;
-  --depth: #f7d3e5;
-  --edge-hi: #eaa9c9;
-  --g-edge: rgba(255, 190, 225, 0.22);
+  --ink: #5a2c47;
+  --ink-2: #8a5a76;
+  --ink-3: #b08aa0;
+  --paper: #fff9fb;
+  --paper-2: #fdeef4;
+  --line: rgba(90, 44, 71, 0.12);
+  --blue: #c95b8f;
+  --glass: rgba(122, 78, 104, 0.8);
+  --glass-hi: rgba(255, 220, 236, 0.16);
+  --void: #7a5a6e;
+  --pop: 0 4px 0 var(--ink), 0 18px 40px rgba(90, 44, 71, 0.25);
+  --edge: #f4d3e2;
+  --depth: #f8e0ea;
+  --edge-hi: #edbfd3;
+  --g-edge: rgba(255, 215, 232, 0.24);
 }
 
 .app.theme-summer .btn.primary {
-  background: #e0368f;
-  border-color: #4a1035;
+  background: #c95b8f;
+  border-color: #5a2c47;
 }

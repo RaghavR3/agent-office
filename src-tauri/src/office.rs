@@ -51,6 +51,8 @@ pub struct Persisted {
     /// The session title an agent had when you cleared it, so the stale title isn't shown as its task.
     pub cleared_titles: HashMap<String, String>,
     pub notifications_off: bool,
+    /// With Summer as chief of staff, keep the normal office instead of the dream house.
+    pub dream_house_off: bool,
     /// Which terminal app to show: "auto" (Orca when it's running, else cmux), "orca" or "cmux".
     pub host: String,
     pub cmux_password: String,
@@ -266,6 +268,7 @@ pub struct Snapshot {
     pub cos_name: String,
     pub ask_cos_name: bool,
     pub notifications: bool,
+    pub dream_house: bool,
     pub setup: Setup,
     pub usage: Option<crate::usage::Usage>,
     pub mcp: Vec<crate::mcp::Server>,
@@ -1271,6 +1274,7 @@ impl Office {
             cos_name: self.cos_name(),
             ask_cos_name: self.p.ask_cos_name,
             notifications: !self.p.notifications_off,
+            dream_house: !self.p.dream_house_off,
             usage: self.live.usage.clone(),
             mcp: self.live.mcp_servers.clone(),
             briefing: self.p.briefing.clone(),

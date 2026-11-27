@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Setup, api } from "../api";
+import { isSummer } from "../office/art";
 import { Dialog } from "./Dialog";
 
 const HOSTS: { id: Setup["preference"]; label: string }[] = [
@@ -27,7 +28,7 @@ function hostLine(s: Setup): string {
   return (s.host === "orca" ? s.orca : s.cmux) ? `Showing ${name}.` : `Showing ${name}, which isn't running right now.`;
 }
 
-export function SettingsDialog({ setup, onClose }: { setup: Setup; onClose: () => void }) {
+export function SettingsDialog({ setup, cosName, dreamHouse, onClose }: { setup: Setup; cosName: string; dreamHouse: boolean; onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [password, setPassword] = useState("");
@@ -118,6 +119,19 @@ export function SettingsDialog({ setup, onClose }: { setup: Setup; onClose: () =
             <span className="quiet">Signed out, or switching plans? Claude Code's own sign-in opens in a terminal.</span>
             <button className="btn ghost" onClick={() => run(api.claudeSignIn)} disabled={busy || !setup.claude}>
               Sign in
+            </button>
+          </div>
+        </section>
+      )}
+
+      {isSummer(cosName) && (
+        <section className="setting">
+          <h3>Dream house</h3>
+          <p>With {cosName.trim()} as chief of staff, the office is a pink dream house full of golden retrievers.</p>
+          <div className="handoff-row">
+            <span className="quiet">{dreamHouse ? "On." : `Off: the normal office, with ${cosName.trim()} at reception.`}</span>
+            <button className="btn ghost" onClick={() => run(() => api.setDreamHouse(!dreamHouse))} disabled={busy}>
+              {dreamHouse ? "Turn off" : "Turn on"}
             </button>
           </div>
         </section>

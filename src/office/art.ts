@@ -81,53 +81,55 @@ const P = {
 
 export type Theme = "office" | "summer";
 
-/** Name your chief of staff Summer and the office becomes a pink dream house of golden retrievers. */
-export const themeFor = (cosName: string): Theme => (cosName.trim().toLowerCase() === "summer" ? "summer" : "office");
+export const isSummer = (cosName: string) => cosName.trim().toLowerCase() === "summer";
+
+/** Name your chief of staff Summer and the office becomes a pink dream house of golden retrievers, unless you've turned that off. */
+export const themeFor = (cosName: string, dreamHouse = true): Theme => (dreamHouse && isSummer(cosName) ? "summer" : "office");
 
 const OFFICE: typeof P = structuredClone(P);
 
 const SUMMER: typeof P = {
-  outline: "#4a1035",
-  void: "#3d0f2e",
-  wood: ["#f6b3cf", "#f2a8c7", "#f9bdd6", "#f4aecb"],
-  woodSeam: "#de86ad",
-  carpet: "#ffe0ee",
-  carpetAlt: "#fff7fb",
-  hallRug: "#ff7eb6",
-  wallCap: "#c2185b",
-  wallCapHi: "#e0478a",
-  wallFace: "#ffe4f1",
-  wallFaceLo: "#ffd1e7",
-  base: "#f06292",
-  rugs: ["#ff69b4", "#c77dff", "#4dd0e1", "#ff8fab", "#f48fb1", "#ba68c8", "#ffb3d9", "#ef5d9a"],
-  deskTop: "#fff6fb",
+  outline: "#6a3a57",
+  void: "#7a5a6e",
+  wood: ["#f9dbe8", "#f7d3e2", "#fbe2ec", "#f8d7e5"],
+  woodSeam: "#ecbcd0",
+  carpet: "#fdf0f6",
+  carpetAlt: "#fffafc",
+  hallRug: "#f9cfe1",
+  wallCap: "#e7a9c4",
+  wallCapHi: "#f1c3d6",
+  wallFace: "#fff4f8",
+  wallFaceLo: "#fde8f1",
+  base: "#f2bcd3",
+  rugs: ["#f9c4da", "#dccdf1", "#c8e8ef", "#ffd6e0", "#f6cfe2", "#e6d0f1", "#ffe3ee", "#f4c2d6"],
+  deskTop: "#fffbfd",
   deskHi: "#ffffff",
-  deskFront: "#ff6fae",
-  deskDark: "#e0438f",
-  leg: "#b0185a",
-  bezel: "#8e1450",
-  steel: "#c2477f",
+  deskFront: "#f7c3d9",
+  deskDark: "#eaa9c5",
+  leg: "#c98aa8",
+  bezel: "#8a5a76",
+  steel: "#d9a3bd",
   keys: "#ffffff",
-  chair: "#ff4fa3",
-  chairHi: "#ff8cc6",
-  chairDark: "#c2185b",
-  pot: "#ff8fc8",
-  potRim: "#ffb8dd",
-  potDark: "#e0679f",
-  leaves: ["#4e9a5a", "#63b066", "#3f7c45", "#ff5fa8"],
-  shelf: "#f8bbd9",
-  shelfLight: "#fde4f0",
-  shelfBack: "#e48ab5",
-  books: ["#ff4fa3", "#c77dff", "#ffd23f", "#4dd0e1", "#ff8fab", "#ffffff", "#ba68c8", "#ef5d9a"],
-  sofa: "#ff69b4",
-  sofaHi: "#ff9acb",
-  sofaDark: "#d63384",
-  lobbyRug: "#ff4fa3",
-  stone: ["#fff3f9", "#ffffff", "#f6c6dd"],
-  lampShade: ["#ff8cc6", "#ffc2e0", "#e0679f"],
-  windowFrame: "#d81b60",
-  reception: { top: "#ffffff", topHi: "#fff6fb", front: "#ff4fa3", trim: "#ffd23f", slat: "#e0438f", base: "#b0185a" },
-  lift: { frame: "#ff69b4", frameHi: "#ff9acb", door: "#ffd23f", doorHi: "#ffe57a", seam: "#e0a800", sill: "#c2185b" },
+  chair: "#f5afcd",
+  chairHi: "#fad0e1",
+  chairDark: "#df90b2",
+  pot: "#f9c6dc",
+  potRim: "#fcdbe9",
+  potDark: "#eaa9c5",
+  leaves: ["#5fa36a", "#74b877", "#4f8a57", "#ffa6cf"],
+  shelf: "#fbd9e7",
+  shelfLight: "#fff2f7",
+  shelfBack: "#f0bfd4",
+  books: ["#f7a8cb", "#d4b8f0", "#fbe08a", "#a8dde8", "#ffc2d4", "#ffffff", "#e2bdf0", "#f4b0cb"],
+  sofa: "#f7b7d2",
+  sofaHi: "#fbd2e3",
+  sofaDark: "#e79ebf",
+  lobbyRug: "#f9c9dd",
+  stone: ["#fff7fa", "#ffffff", "#f3d8e4"],
+  lampShade: ["#fac8dd", "#fde4ee", "#ecb0c9"],
+  windowFrame: "#e7a9c4",
+  reception: { top: "#ffffff", topHi: "#fffbfd", front: "#f5b3cf", trim: "#f6dc8a", slat: "#eaa2c2", base: "#cf8fae" },
+  lift: { frame: "#f7b7d2", frameHi: "#fbd2e3", door: "#f9e6b0", doorHi: "#fff3cf", seam: "#e9cf86", sill: "#df90b2" },
 };
 
 let theme: Theme = "office";
@@ -144,7 +146,7 @@ export function setTheme(t: Theme): boolean {
 }
 
 /** Colours the office view draws itself, outside the sprites. */
-export const scene = () => ({ void: P.void, cosTag: theme === "summer" ? "#d6338a" : "#2f7350" });
+export const scene = () => ({ void: P.void, cosTag: theme === "summer" ? "#c95b8f" : "#2f7350" });
 
 // ---- floor layer ----------------------------------------------------------------------------
 
@@ -803,10 +805,10 @@ export function personFrames(L: Look): Frames {
 // ---- golden retrievers ------------------------------------------------------------------------
 
 const FUR = ["#f5d49c", "#ecb86c", "#e0a25a", "#cf8a45", "#f2c682"];
-const COLLAR = ["#ff4fa3", "#4dd0e1", "#c77dff", "#ffd23f", "#ff8fab", "#ffffff", "#ef5d9a", "#7ed9a0", "#ff9a5c"];
+const COLLAR = ["#f58cbc", "#8fd3e0", "#c9a6f0", "#f6d26b", "#ffadc2", "#ffffff", "#e98db3", "#9ad9b0", "#f9b48a"];
 const NOSE = "#2a1f26";
 const TONGUE = "#ff7aa8";
-const BOW = "#ff3d9a";
+const BOW = "#f58cbc";
 const TAG = "#ffd23f";
 
 interface Dog {

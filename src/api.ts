@@ -177,6 +177,8 @@ export interface Snapshot {
   /** First start: the chief of staff hasn't been named yet. */
   askCosName: boolean;
   notifications: boolean;
+  /** With Summer as chief of staff: the dream house (true) or the normal office. */
+  dreamHouse: boolean;
   setup: Setup;
   /** Claude plan usage and saved accounts, from Orca. */
   usage: Usage | null;
@@ -238,6 +240,7 @@ export const api = {
   forgetSession: (sessionId: string) => invoke<void>("forget_session", { sessionId }),
   answerAsk: (agentId: string, answers: string[]) => invoke<void>("answer_ask", { agentId, answers }),
   setNotifications: (on: boolean) => invoke<void>("set_notifications", { on }),
+  setDreamHouse: (on: boolean) => invoke<void>("set_dream_house", { on }),
   openTerminal: (agentId: string) => invoke<void>("open_terminal", { agentId }),
   refreshUsage: () => invoke<void>("refresh_usage"),
   mcpSignIn: (name: string) => invoke<void>("mcp_sign_in", { name }),
